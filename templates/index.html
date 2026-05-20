@@ -3,16 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>고객 이탈·이슈 모니터</title>
+  <title>고객 이탈·이슈 리포트</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
-  <header class="hero">
-    <h1>고객 이탈·이슈 위험 보드</h1>
+  <header class="hero sheet">
+    <h1>고객 이탈·이슈 위험 리포트</h1>
     <p class="sub">
       업체명·사업자번호 리스트를 넣으면 <strong>뉴스(RSS)</strong>, <strong>주가(yfinance)</strong>,
-      <strong>전자공시 Open DART</strong>(기업개황·공시검색·주요재무지표, <code>.env</code>의 <code>DART_API_KEY</code>)를 합쳐 복합 위험 점수와 추정 이탈 확률을 표시합니다.
-      발송 데이터는 연동 시 가중치 E에 반영할 수 있습니다(현재 중립 불확실성).
+      <strong>전자공시 Open DART</strong>(기업개황·공시검색·주요재무지표, <code>DART_API_KEY</code>)를 반영해 복합 위험과 추정 이탈 확률을 제공합니다.
     </p>
     <div class="formula">
       <span>복합 위험:</span> <code>{{ formula_summary.weights }}</code>
@@ -22,93 +21,150 @@
   </header>
 
   <main>
-    <section class="panel">
-      <h2>고객 리스트 (CSV)</h2>
+    <section class="panel sheet">
+      <h2>고객 리스트 (CSV 입력)</h2>
       <p class="hint">
-        컬럼 예: <code>업체명</code>, <code>사업자등록번호</code>, (선택) <code>종목코드</code><br />
-        영문: <code>company_name</code>, <code>business_number</code>, <code>ticker</code><br />
+        컬럼 예: <code>업체명</code>, <code>사업자등록번호</code>, (선택) <code>종목코드</code> · 영문:
+        <code>company_name</code>, <code>business_number</code>, <code>ticker</code><br />
         {% if dart_bizno_count %}
         사업자 입력: <strong>{{ dart_bizno_rel }}</strong> (<strong>{{ dart_bizno_count }}</strong>건).
-        매칭 결과 리스트: <strong>{{ dart_master_rel }}</strong> — <code>python build_dart_registry.py</code> 로 생성합니다.
+        매칭 리스트: <strong>{{ dart_master_rel }}</strong> — <code>python build_dart_registry.py</code> 로 생성.
         {% if stock_gap and stock_gap.input_total %}
         <br />
-        종목 코드 공란(입력 순서 대비 마스터 CSV): <strong>{{ stock_gap.input_missing_stock }}</strong> / {{ stock_gap.input_total }}건
-        · 마스터 파일 내 종목 비어 있는 행: <strong>{{ stock_gap.master_rows_empty_stock }}</strong>건
+        종목 코드 공란: <strong>{{ stock_gap.input_missing_stock }}</strong> / {{ stock_gap.input_total }}건
+        · 마스터 내 종목 공란: <strong>{{ stock_gap.master_rows_empty_stock }}</strong>건
         {% if stock_gap.master_rows_total %}(/ CSV {{ stock_gap.master_rows_total }}행){% endif %}
-        —
-        확인: <code>python build_dart_registry.py --list-incomplete</code>
+        — <code>python build_dart_registry.py --list-incomplete</code>
         {% endif %}
-        {% else %}
-        <strong>{{ dart_bizno_rel }}</strong> 에 번호가 없으면 예시 CSV가 표시됩니다.
         {% endif %}
       </p>
       {% if error %}
       <div class="alert">{{ error }}</div>
       {% endif %}
-      <form method="post" enctype="multipart/form-data">
-        <textarea name="csv_text" rows="12" placeholder="첫 줄 예: 사업자번호,업체명,공시번호[,종목코드]&#10;1248100998,삼성전자,00126380,005930">{{ csv_text }}</textarea>
-        <div class="row row-check">
-          <label class="check">
-            <input type="checkbox" name="use_dart_bizno_list" value="1" />
-            <span><code>{{ dart_bizno_rel }}</code> 사업자번호 목록으로만 분석</span>
-          </label>
+      <form method="post" class="analyze-form">
+        <label class="sr-only" for="csv_text">CSV 본문</label>
+        <textarea id="csv_text" name="csv_text" rows="8" spellcheck="false" placeholder="첫 줄 예: 사업자번호,업체명,공시번호[,종목코드]
+1248100998,삼성전자,00126380,005930">{{ csv_text }}</textarea>
+
+        {% if not csv_preview.empty %}
+        <div class="csv-preview-wrap">
+          <div class="csv-preview-head">
+            <span class="csv-preview-title">표 미리보기</span>
+            {% if csv_preview.overflow %}
+            <span class="csv-preview-note">처음 {{ csv_preview.rows|length }}개 데이터 행만 표시</span>
+            {% endif %}
+          </div>
+          <div class="csv-preview-scroll">
+            <table class="csv-sheet">
+              <thead>
+                <tr>
+                  {% for h in csv_preview.headers %}
+                  <th>{{ h }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in csv_preview.rows %}
+                <tr>
+                  {% for cell in row %}
+                  <td>{{ cell }}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div class="row">
-          <label class="file">
-            파일 선택
-            <input type="file" name="file" accept=".csv,.txt" />
-          </label>
-          <button type="submit">분석 실행</button>
+        {% endif %}
+
+        <div class="form-submit-wrap">
+          <button type="submit" class="btn-primary">분석 실행</button>
         </div>
       </form>
     </section>
 
     {% if results %}
-    <section class="panel">
-      <h2>결과 (위험 점수 높은 순)</h2>
+    {% set sorted_results = results|sort(attribute='composite_score', reverse=true) %}
+    <section class="panel sheet">
+      <h2>위험 상위 10개 업체</h2>
+      <p class="chart-intro">복합 위험 점수(0~100)와 추정 이탈 확률을 같은 스케일 막대로 비교했습니다.</p>
+      <div class="top10-chart">
+        {% for r in sorted_results %}
+          {% if loop.index <= 10 %}
+          <article class="chart-card">
+            <div class="chart-card-head">
+              <span class="chart-rank">{{ loop.index }}</span>
+              <div class="chart-title-block">
+                <div class="chart-company">{{ r.company_name or '(이름 없음)' }}</div>
+                <div class="chart-meta">
+                  {% if r.ticker_available and r.ticker %}<span>종목 {{ r.ticker }}</span>{% endif %}
+                  <span>{{ r.business_number }}</span>
+                </div>
+              </div>
+              <div class="chart-numbers">
+                <span class="num-score">{{ '%.1f'|format(r.composite_score) }}</span>
+                <span class="num-slash">/</span>
+                <span class="num-churn">{{ '%.1f%%'|format(r.estimated_churn_probability * 100) }}</span>
+              </div>
+            </div>
+            <div class="meter-row">
+              <span class="meter-cap">복합 위험</span>
+              <div class="meter-track" role="presentation">
+                <div class="meter-fill meter-score" style="width: {{ [100, r.composite_score]|min }}%;"></div>
+              </div>
+            </div>
+            <div class="meter-row">
+              <span class="meter-cap">추정 이탈 확률</span>
+              <div class="meter-track" role="presentation">
+                <div class="meter-fill meter-churn" style="width: {{ [100, r.estimated_churn_probability * 100]|min }}%;"></div>
+              </div>
+            </div>
+          </article>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="panel sheet">
+      <h2>전체 결과 (위험 점수 높은 순)</h2>
       {% if results_ticker_missing_count %}
       <p class="summary-gap">
-        이번 분석 결과 중 종목 코드가 비어 보조 시장값(M)이 적용된 건수: <strong>{{ results_ticker_missing_count }}</strong> / {{ results|length }}건
+        이번 분석에서 종목 미반영 시장 보조값(M) 적용: <strong>{{ results_ticker_missing_count }}</strong> / {{ results|length }}건
       </p>
       {% endif %}
       <div class="table-wrap">
-        <table>
+        <table class="result-table">
           <thead>
             <tr>
               <th>업체명</th>
               <th>사업자번호</th>
               <th>종목</th>
               <th>복합점수</th>
-              <th>추정이탈확률</th>
-              <th>N 뉴스</th>
-              <th>M 시장</th>
-              <th>C 신용·공시</th>
-              <th>DART·비고</th>
+              <th>추정이탈</th>
+              <th>N</th>
+              <th>M</th>
+              <th>C</th>
+              <th>비고</th>
             </tr>
           </thead>
           <tbody>
-            {% for r in results|sort(attribute='composite_score', reverse=true) %}
+            {% for r in sorted_results %}
             <tr class="{% if not r.ticker_available %}row-ticker-gap{% endif %} {% if r.composite_score >= 60 %}risk-high{% elif r.composite_score >= 45 %}risk-mid{% endif %}">
-              <td><strong>{{ r.company_name }}</strong></td>
-              <td>{{ r.business_number }}</td>
-              <td class="nowrap">
-                {% if r.ticker %}
-                <span class="ticker">{{ r.ticker }}</span>
-                {% else %}
-                <span class="ticker-absent" title="DART 매칭 또는 상장 종목 코드 없음">— 종목 없음</span>
-                {% endif %}
+              <td class="td-name">{{ r.company_name }}</td>
+              <td class="td-mono">{{ r.business_number }}</td>
+              <td class="td-mono nowrap">
+                {% if r.ticker %}<span class="ticker">{{ r.ticker }}</span>
+                {% else %}<span class="ticker-absent">종목 없음</span>{% endif %}
               </td>
-              <td>{{ '%.1f'|format(r.composite_score) }}</td>
-              <td>{{ '%.1f%%'|format(r.estimated_churn_probability * 100) }}</td>
-              <td>{{ '%.2f'|format(r.estimate.news_risk) }}</td>
-              <td>
+              <td class="td-num">{{ '%.1f'|format(r.composite_score) }}</td>
+              <td class="td-num">{{ '%.1f%%'|format(r.estimated_churn_probability * 100) }}</td>
+              <td class="td-num">{{ '%.2f'|format(r.estimate.news_risk) }}</td>
+              <td class="td-num">
                 {{ '%.2f'|format(r.estimate.market_risk) }}
-                {% if not r.market_observed %}
-                <br /><span class="m-note" title="실제 시세 미반영 시 보조(중립~불확실) 값">보조값</span>
-                {% endif %}
+                {% if not r.market_observed %}<span class="m-note">보조값</span>{% endif %}
               </td>
-              <td>{{ '%.2f'|format(r.estimate.credit_risk) }}</td>
-              <td class="small">
+              <td class="td-num">{{ '%.2f'|format(r.estimate.credit_risk) }}</td>
+              <td class="td-notes">
                 {% if r.dart and r.dart.company_profile and r.dart.company_profile.corp_name %}
                   <span class="dart-tag">개황</span>
                   {{ r.dart.company_profile.corp_name[:28] }}
@@ -117,22 +173,19 @@
                 {% endif %}
                 {% if r.dart and r.dart.disclosure_sample %}
                   <span class="dart-tag">공시</span>
-                  {{ r.dart.disclosure_sample[0][:36] }}…
-                  <br/>
+                  {{ r.dart.disclosure_sample[0][:36] }}…<br/>
                 {% endif %}
                 {% if r.news.get('articles') %}
-                  {% for a in r.news.articles[:5] %}
+                  {% for a in r.news.articles[:3] %}
                     {% if a.get('link') %}
                       <span class="dart-tag">뉴스</span>
-                      <a class="news-link" href="{{ a.link }}" target="_blank" rel="noopener noreferrer">{{ (a.title or '기사')[:44] }}{% if a.title and (a.title|length) > 44 %}…{% endif %}</a><br/>
+                      <a class="news-link" href="{{ a.link }}" target="_blank" rel="noopener noreferrer">{{ (a.title or '기사')[:40] }}{% if a.title and (a.title|length) > 40 %}…{% endif %}</a><br/>
                     {% endif %}
                   {% endfor %}
                 {% elif r.news.sample_titles %}
                   <span class="dart-tag">뉴스</span> {{ r.news.sample_titles[0][:36] }}…
                 {% endif %}
-                {% if r.dart and r.dart.message %}
-                  <br/><span class="muted">{{ r.dart.message }}</span>
-                {% endif %}
+                {% if r.dart and r.dart.message %}<span class="muted">{{ r.dart.message }}</span>{% endif %}
               </td>
             </tr>
             {% endfor %}
@@ -141,20 +194,17 @@
       </div>
     </section>
 
-    <section class="panel muted-box">
+    <section class="panel muted-box sheet">
       <h3>해석 안내</h3>
       <ul>
-        <li>복합 점수는 0~100이며, 발송량 급감(E)은 추후 CSV 연동 시 반영합니다.</li>
-        <li>비상장·종목 코드 미충족 사업자는 주가 데이터가 반영되지 않아 시장(M)에 보조(중립~불확실) 값이 들어 갑니다. 마스터 CSV 점검은 <code>python build_dart_registry.py --list-incomplete</code> 입니다.</li>
-        <li>DART: 공시·재무 요청은 <strong>공시번호</strong>(DART 고유번호 8자리) 기준. <code>{{ dart_bizno_rel }}</code> → <code>python build_dart_registry.py</code> → <code>{{ dart_master_rel }}</code>(사업자번호·업체명·공시번호·종목코드). <code>.env</code>에 <code>DART_API_KEY</code>.</li>
-        <li>동명이인·유사 상호로 뉴스 오탐이 있을 수 있으니 담당자 검증이 필요합니다.</li>
+        <li>복합 점수는 0~100 스케일입니다.</li>
+        <li>종목 코드가 없거나 비상장인 경우 주가가 반영되지 않아 시장(M)에 보조값이 들어 갈 수 있습니다. 점검: <code>python build_dart_registry.py --list-incomplete</code></li>
+        <li>DART 연동에는 <strong>공시번호</strong>(8자리)가 유리합니다. <code>{{ dart_bizno_rel }}</code> → <code>{{ dart_master_rel }}</code></li>
+        <li>유사 상호 뉴스는 오탐이 있을 수 있으니 검증이 필요합니다.</li>
       </ul>
     </section>
     {% endif %}
   </main>
 
-  <footer>
-    <span>로컬 전용 · 외부 유료 신용정보 미연동</span>
-  </footer>
 </body>
 </html>

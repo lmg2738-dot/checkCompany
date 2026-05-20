@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 try:
     from dotenv import load_dotenv
@@ -112,6 +112,39 @@ def parse_csv_text(text: str) -> list[dict]:
     return rows
 
 
+def csv_sheet_preview(csv_text: str, max_display_rows: int = 50) -> dict[str, Any]:
+    """화면 표 미리보기용: 헤더(첫 행) + 본문 상한 높이에서 스크롤."""
+    t = (csv_text or "").strip()
+    meta: dict[str, Any] = {
+        "empty": True,
+        "headers": [],
+        "rows": [],
+        "overflow": False,
+    }
+    if not t:
+        return meta
+    meta["empty"] = False
+    reader = csv.reader(io.StringIO(t))
+    rows = list(reader)
+    if not rows:
+        return meta
+    headers = [(str(c) if c is not None else "").strip() for c in rows[0]]
+    body = rows[1:]
+    overflow = len(body) > max_display_rows
+    body = body[:max_display_rows]
+    nh = len(headers)
+    padded: list[list[str]] = []
+    for raw in body:
+        cells = [(str(x) if x is not None else "").strip() for x in raw]
+        if nh:
+            cells = (cells + [""] * nh)[:nh]
+        padded.append(cells)
+    meta["headers"] = headers
+    meta["rows"] = padded
+    meta["overflow"] = overflow
+    return meta
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     results = []
@@ -121,33 +154,13 @@ def index():
     stock_gap = dart_master_stock_gap_stats()
 
     if request.method == "POST":
-        use_dart_list = request.form.get("use_dart_bizno_list") == "1"
         raw_csv = request.form.get("csv_text") or ""
-        if not use_dart_list and "file" in request.files and request.files["file"].filename:
-            try:
-                raw_csv = request.files["file"].stream.read().decode("utf-8-sig", errors="replace")
-            except Exception as e:
-                err = f"파일 읽기 오류: {e}"
 
         if not err:
             try:
-                if use_dart_list:
-                    nums = load_bizno_input_numbers()
-                    customers = dart_bizno_input_customer_rows()
-                    if not customers:
-                        err = (
-                            f"{DART_BIZNO_INPUT_LIST.relative_to(BASE)} 에 유효한 사업자번호(10자리)가 없습니다. "
-                            "# 주석이 아닌 줄에 번호를 넣었는지 확인하세요."
-                        )
-                    else:
-                        if DART_BIZ_MASTER_CSV.is_file():
-                            raw_csv = DART_BIZ_MASTER_CSV.read_text(encoding="utf-8-sig")
-                        else:
-                            raw_csv = "사업자번호,업체명,공시번호\n" + "\n".join(f"{b},," for b in nums)
-                else:
-                    customers = parse_csv_text(raw_csv)
-                    if not customers:
-                        err = "유효한 행이 없습니다. 사업자번호(10자리) 또는 업체명+사업자번호 컬럼을 확인하세요."
+                customers = parse_csv_text(raw_csv)
+                if not customers:
+                    err = "유효한 행이 없습니다. 사업자번호(10자리) 또는 업체명+사업자번호 컬럼을 확인하세요."
                 if not err:
                     gap = float(os.environ.get("DART_ANALYZE_SLEEP_SEC") or "0")
                     for i, c in enumerate(customers):
@@ -165,12 +178,14 @@ def index():
                 err = str(e)
 
     results_with_gaps = [r for r in results if not r.get("ticker_available")]
+    csv_preview = csv_sheet_preview(raw_csv)
     return render_template(
         "index.html",
         results=results,
         results_ticker_missing_count=len(results_with_gaps),
         error=err,
         csv_text=raw_csv,
+        csv_preview=csv_preview,
         dart_bizno_count=dart_bizno_count,
         stock_gap=stock_gap,
         dart_bizno_rel=str(DART_BIZNO_INPUT_LIST.relative_to(BASE)).replace("\\", "/"),
