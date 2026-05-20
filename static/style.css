@@ -1,0 +1,290 @@
+:root {
+  --bg: #0f1419;
+  --panel: #1a2332;
+  --text: #e7ecf3;
+  --muted: #8b98a8;
+  --accent: #3d8bfd;
+  --high: #f85149;
+  --mid: #d29922;
+  --border: #2d3a4d;
+  font-family: "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: linear-gradient(160deg, #0f1419 0%, #151d2a 50%, #0f1419 100%);
+  color: var(--text);
+  min-height: 100vh;
+  line-height: 1.5;
+}
+
+.hero {
+  padding: 2rem 1.5rem 1rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.hero h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.75rem;
+  font-weight: 700;
+}
+
+.sub {
+  color: var(--muted);
+  max-width: 800px;
+}
+
+.formula {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.formula code {
+  color: #79c0ff;
+  font-size: 0.85rem;
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 1.5rem 3rem;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.panel h2 {
+  margin-top: 0;
+  font-size: 1.15rem;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.hint code {
+  color: #a5d6ff;
+  font-size: 0.85rem;
+}
+
+textarea {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #0d1218;
+  color: var(--text);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.row-check {
+  margin-top: 0.5rem;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.check input {
+  margin-top: 0.2rem;
+}
+
+.check span code {
+  color: #79c0ff;
+}
+
+button[type="submit"] {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 0.6rem 1.25rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button[type="submit"]:hover {
+  filter: brightness(1.08);
+}
+
+.file input {
+  display: none;
+}
+
+.file {
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.alert {
+  background: rgba(248, 81, 73, 0.15);
+  border: 1px solid var(--high);
+  color: #ffb4b0;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+tbody tr:hover {
+  background: rgba(61, 139, 253, 0.06);
+}
+
+.risk-high {
+  box-shadow: inset 3px 0 0 var(--high);
+}
+
+.risk-mid {
+  box-shadow: inset 3px 0 0 var(--mid);
+}
+
+.small {
+  max-width: 220px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.dart-tag {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.1rem 0.35rem;
+  margin-right: 0.25rem;
+  border-radius: 4px;
+  background: rgba(61, 139, 253, 0.25);
+  color: #a5d6ff;
+  vertical-align: middle;
+}
+
+.news-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+
+.news-link:hover {
+  color: #a5d6ff;
+}
+
+.muted-box {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.muted-box ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.row-ticker-gap {
+  background: rgba(210, 153, 34, 0.05);
+}
+
+.row-ticker-gap.risk-high,
+.row-ticker-gap.risk-mid {
+  background: rgba(210, 153, 34, 0.08);
+}
+
+.summary-gap {
+  font-size: 0.88rem;
+  color: var(--muted);
+  margin: 0 0 1rem;
+  padding: 0.55rem 0.85rem;
+  border-left: 3px solid var(--mid);
+  background: rgba(210, 153, 34, 0.08);
+  border-radius: 6px;
+}
+
+.summary-gap strong {
+  color: #e6c963;
+}
+
+.ticker {
+  font-family: ui-monospace, Consolas, monospace;
+  letter-spacing: 0.03em;
+}
+
+.ticker-absent {
+  font-size: 0.8rem;
+  color: var(--mid);
+  font-weight: 600;
+}
+
+.m-note {
+  font-size: 0.72rem;
+  color: var(--mid);
+  font-weight: 600;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+footer {
+  text-align: center;
+  padding: 2rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}

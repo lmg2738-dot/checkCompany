@@ -1,0 +1,66 @@
+# 이어하기 안내 (DART API 일일 한도 · 마스터 빌드)
+
+최종 갱신: 2026-05-20
+
+## 직전 실행 스냅샷 (자동: `data/dart_build_history.json` 의 `last` 와 동일)
+| 항목 | 값 |
+|------|-----|
+| 종료 시각(UTC) | **2026-05-19T23:15:40Z 대략** (`last.ended_at`) |
+| CSV 기록 행 수 | 287 / 입력 유효 476 |
+| **미매칭 사업자** | **189건** |
+| 1단계 API | **189회** |
+| 2단계 API | **441회** (corp 목록 신규 구간 스캔; 추가 매칭 **0건**) |
+| **다음 corp 스캔 인덱스** | **118106** (= 현재 정렬 corp 목록 길이까지 순회 완료, `.dart_build_scan_next_index`) |
+
+### 지금 상태에서 의미 (2026-05-19 자동 후속 실행 결과)
+**`--fresh-corpcache --scan-status`** 로 corp 목록이 **117665 → 118106**건으로 늘어난 것을 확인한 뒤 **`--resume-scan`** 으로 인덱스 117665~ 끝 **441건**을 스캔했습니다. 그래도 미매칭 **189건은 동일**합니다.  
+지금 인덱스 **118106** 은 목록 끝이므로 `--resume-scan` 만 반복하면 **2단계 API 0회**로 끝납니다. 다음 진행은 **수동 검토**(`data/dart_input_no_seed_match.csv`), 또는 **차후 corp 목록이 또 갱신된 뒤** 같은 순서(`--fresh-corpcache --scan-status` → 남은 구간 있으면 `--resume-scan`).
+
+### 빠른 명령
+- **재개:** `python build_dart_registry.py --resume-scan` (`next_corp_scan_index` 가 목록 끝과 같으면 2단계 API 0회로 끝날 수 있음 — 위 블록 참고)
+- **corp 목록 vs 재개 인덱스 요약(API):** `python build_dart_registry.py --scan-status` — corp 목록이 길어지면 최신 zip 재받기:  
+  `python build_dart_registry.py --fresh-corpcache --scan-status`
+- **마스터 CSV만으로 못 채운 입력 번호(API 없음):** `python build_dart_registry.py --export-no-seed-match` → 기본 `data/dart_input_no_seed_match.csv`
+- **미완료 행만 나열(API 없음):** `python build_dart_registry.py --list-incomplete`
+
+
+> **기준 데이터:** 실행할 때마다 바뀌는 숫자(미매칭 수, `next_corp_scan_index` 등)의 **원본은 항상** `data/dart_build_history.json` 의 `last` 입니다. 작업 후 그 내용으로 위 표를 덮어 쓰면 다음 점검 때 혼동이 없습니다.
+
+### 내일(이후) 점검 순서
+1. `dart_build_history.json` 의 `last.still_unmatched` 가 0이면 완료. 아니면 아래 반복.
+2. **`last.stage2_api_calls == 0` 이고 `still_unmatched > 0` 이며 `next_corp_scan_index` 가 corp 목록 끝**이면, `--resume-scan` 만으로는 추가 스캔 구간 없음 → 수동 검토·corp 목록 갱신 후 검토 또는 `--scan-start-index 0`(일일 호출 대량 소비 주의).
+3. API 한도 리셋 여부 확인 후 `python build_dart_registry.py --resume-scan`
+4. 로그에 `2단계에 남은 호출이 없습니다` 가 나오면 **당일 한도 소진** — 다음날 재실행.
+5. **장기간 2단계에서 매칭 0건**(한도 안에서 스캔만 끝난 경우)이면: 사업자번호 오기, DART 미등록·해외법인, 폐업 등 수동 검토 대상.
+
+## 종목코드(표에서 ‘품목코드’로 부르는 경우 있음)가 중간부터 비는 이유
+1. **DART 일일 호출 한도**(계정당 약 **4만 회** 등) 도중 이후 `company.json` 이 실패하면 매칭·종목이 비어 감.
+2. **`data/dart_biz_master_list.csv` 빌드 미완료** — 0단계에서 복원되는 행만 종목이 채워짐.
+3. **엑셀에서 공시번호 앞 0이 숫자로 깨짐** — 코드에서 8자리 0패딩 보정(구버전 CSV는 재저장 권장).
+4. **비상장·미공시** — DART에 종목코드가 없을 수 있음.
+
+## 에이전트/차주 작업 한 줄
+**「CONTINUE_HERE.txt + dart_build_history.json 확인 후 `--scan-status`(필요 시 `--fresh-corpcache`), 미매칭은 `--export-no-seed-match` 로 목록화»**
+
+## 실행 명령 (한도 리셋 후)
+1. `cd c:\Users\lmg2738\Issue`
+2. **미완료(종목코드 없음)만 점검 목록** — API 없음:  
+   `python build_dart_registry.py --list-incomplete`
+3. **마스터 이어 만들기** — 이미 매칭된 사업자는 건너뜀, 2단계는 `.dart_build_scan_next_index`부터:  
+   `python build_dart_registry.py --resume-scan`  
+   또는 한 번에: `python build_dart_registry.py` (처음부터 스캔 인덱스 0이면 시간·한도 많이 소모)
+4. **일일 API 상한**(기본 4만): `.env`에 `DART_BUILD_DAILY_CALL_CAP=40000` (이미 기본값). 1단계 소모 후 2단계 상한이 자동으로 줄어듦.
+5. **웹**: `python app.py` 또는 더블클릭 `run_web.bat` → http://127.0.0.1:5058 (기본). 포트 변경: 환경변수 `FLASK_PORT`
+
+## 히스토리·재개 파일
+| 파일 | 용도 |
+|------|------|
+| `data/dart_build_history.json` | 직전 실행: 매칭 건수, 1·2단계 API 호출 수, `next_corp_scan_index`, 종료 메모 |
+| `data/.dart_build_scan_next_index` | 2단계 corp 목록 **다음 인덱스** (`--resume-scan` 시 사용) |
+| `data/dart_biz_master_list.csv` | 사업자번호·업체명·공시번호·종목코드 |
+| `data/dart_input_no_seed_match.csv` | 입력 중 마스터·레지스트리만으로 복원 불가 번호 (`--export-no-seed-match`) |
+| `data/dart_bizno_input_list.txt` | 입력 사업자번호 |
+
+## 참고
+- `python build_dart_registry.py -h` — `--resume-scan`, `--scan-status`, `--fresh-corpcache`, `--export-no-seed-match`, `--list-incomplete`, `--max-scan`, `--scan-start-index`
+- 상세 원인 문자열: `services/dart_build_history.py` 의 `STOCK_CODE_GAP_CAUSES_KO`
