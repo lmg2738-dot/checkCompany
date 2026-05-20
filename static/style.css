@@ -131,11 +131,13 @@ textarea {
   line-height: 1.45;
 }
 
-.csv-preview-wrap {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-  background: #fff;
+/* 폼 제출용 원문 CSV — 화면 비표시 */
+textarea.csv-raw-internal {
+  display: none !important;
+}
+
+.csv-preview-stack {
+  margin-top: 0.25rem;
 }
 
 .csv-preview-head {
@@ -144,7 +146,9 @@ textarea {
   align-items: center;
   padding: 0.45rem 0.85rem;
   background: #f0f3f9;
-  border-bottom: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+  border-bottom: none;
   font-size: 0.8rem;
 }
 
@@ -163,31 +167,54 @@ textarea {
   overflow: auto;
 }
 
-table.csv-sheet {
+/* 미리보기 + 전체 결과 공통 표 레이아웃 */
+table.sheet-data-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.8rem;
+  font-size: 0.84rem;
+  background: #fff;
 }
 
-.csv-sheet th,
-.csv-sheet td {
-  padding: 0.45rem 0.65rem;
+.sheet-data-table th,
+.sheet-data-table td {
+  padding: 0.55rem 0.7rem;
   border-bottom: 1px solid #ebeef4;
   text-align: left;
+  vertical-align: top;
+}
+
+.sheet-data-table thead th {
+  background: #f0f4fa;
+  color: #3d5166;
+  font-weight: 700;
+  font-size: 0.78rem;
   white-space: nowrap;
 }
 
-.csv-sheet th {
-  position: sticky;
-  top: 0;
-  background: #f8fafc;
-  z-index: 1;
-  font-weight: 600;
-  color: #3d4f63;
+.sheet-data-table tbody tr:nth-child(even) {
+  background: #fafbfd;
 }
 
-.csv-sheet tbody tr:nth-child(even) {
-  background: #fafbfd;
+/* 미리보기: 가로 스크롤·헤더 고정 */
+.table-wrap:has(.csv-preview-scroll) {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.csv-preview-scroll .sheet-data-table.csv-sheet thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-shadow: 0 1px 0 #ebeef4;
+}
+
+.sheet-data-table.csv-sheet td,
+.sheet-data-table.csv-sheet th {
+  white-space: nowrap;
+}
+
+.sheet-data-table.result-table tbody tr:hover {
+  background: #eef4ff;
 }
 
 .form-submit-wrap {
@@ -365,35 +392,15 @@ table.csv-sheet {
   border-radius: 8px;
 }
 
-table.result-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.84rem;
-  background: #fff;
+.sheet-data-table.result-table .td-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
-.result-table th,
-.result-table td {
-  text-align: left;
-  padding: 0.55rem 0.7rem;
-  border-bottom: 1px solid #ebeef4;
-  vertical-align: top;
-}
-
-.result-table thead th {
-  background: #f0f4fa;
-  color: #3d5166;
-  font-weight: 700;
+.sheet-data-table.result-table .td-notes {
+  max-width: 220px;
   font-size: 0.78rem;
-  white-space: nowrap;
-}
-
-.result-table tbody tr:nth-child(even) {
-  background: #fafbfd;
-}
-
-.result-table tbody tr:hover {
-  background: #eef4ff;
+  color: var(--muted);
 }
 
 .td-name {

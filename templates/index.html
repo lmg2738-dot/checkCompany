@@ -43,19 +43,19 @@
       {% endif %}
       <form method="post" class="analyze-form">
         <label class="sr-only" for="csv_text">CSV 본문</label>
-        <textarea id="csv_text" name="csv_text" rows="8" spellcheck="false" placeholder="첫 줄 예: 사업자번호,업체명,공시번호[,종목코드]
-1248100998,삼성전자,00126380,005930">{{ csv_text }}</textarea>
+        <textarea id="csv_text" name="csv_text" class="csv-raw-internal" rows="8" spellcheck="false" aria-hidden="true" tabindex="-1">{{ csv_text }}</textarea>
 
         {% if not csv_preview.empty %}
-        <div class="csv-preview-wrap">
+        <div class="csv-preview-stack">
           <div class="csv-preview-head">
             <span class="csv-preview-title">표 미리보기</span>
             {% if csv_preview.overflow %}
             <span class="csv-preview-note">처음 {{ csv_preview.rows|length }}개 데이터 행만 표시</span>
             {% endif %}
           </div>
+          <div class="table-wrap">
           <div class="csv-preview-scroll">
-            <table class="csv-sheet">
+            <table class="sheet-data-table csv-sheet">
               <thead>
                 <tr>
                   {% for h in csv_preview.headers %}
@@ -73,6 +73,7 @@
                 {% endfor %}
               </tbody>
             </table>
+          </div>
           </div>
         </div>
         {% endif %}
@@ -133,7 +134,7 @@
       </p>
       {% endif %}
       <div class="table-wrap">
-        <table class="result-table">
+        <table class="sheet-data-table result-table">
           <thead>
             <tr>
               <th>업체명</th>
