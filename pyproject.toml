@@ -1,0 +1,9 @@
+# Vercel 이 루트의 Flask 앱을 찾도록 진입점을 고정합니다.
+# https://vercel.com/docs/frameworks/backend/flask
+[project]
+name = "customer-churn-board"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.vercel]
+entrypoint = "app:app"
