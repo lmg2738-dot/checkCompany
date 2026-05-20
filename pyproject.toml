@@ -1,9 +1,16 @@
-# Vercel 이 루트의 Flask 앱을 찾도록 진입점을 고정합니다.
+# Vercel Flask: main.py 의 Flask 인스턴스 app 을 명시합니다.
 # https://vercel.com/docs/frameworks/backend/flask
 [project]
 name = "customer-churn-board"
 version = "0.1.0"
 requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.0.0",
+    "requests>=2.31.0",
+    "yfinance>=0.2.40",
+    "python-dotenv>=1.0.0",
+    "truststore>=0.9.0",
+]
 
 [tool.vercel]
-entrypoint = "app:app"
+entrypoint = "main:app"
