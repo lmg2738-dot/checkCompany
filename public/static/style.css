@@ -281,6 +281,41 @@ table.sheet-data-table {
   margin: -0.25rem 0 1rem;
 }
 
+.result-column-legend {
+  margin: -0.2rem 0 0.95rem;
+  padding: 0.6rem 0.95rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #fafbfd;
+}
+
+.result-column-legend p {
+  margin: 0.35rem 0;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: #4a5568;
+}
+
+.result-column-legend p:first-child {
+  margin-top: 0;
+}
+
+.result-column-legend p:last-child {
+  margin-bottom: 0;
+}
+
+.result-column-legend strong {
+  color: var(--text);
+}
+
+abbr.abbr-hint,
+span.abbr-hint {
+  font-style: italic;
+  color: var(--muted);
+  font-size: 0.74rem;
+  margin-right: 0.28rem;
+}
+
 .top10-chart {
   display: flex;
   flex-direction: column;
