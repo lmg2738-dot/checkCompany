@@ -24,24 +24,16 @@
     <section class="panel sheet">
       <h2>고객 리스트 (CSV 입력)</h2>
       <p class="hint">
-        컬럼 예: <code>업체명</code>, <code>사업자등록번호</code>, (선택) <code>종목코드</code> · 영문:
-        <code>company_name</code>, <code>business_number</code>, <code>ticker</code><br />
+        컬럼 예: <code>업체명</code>, <code>사업자등록번호</code>, (선택) <code>종목코드</code>.<br />
         {% if dart_bizno_count %}
         사업자 입력: <strong>{{ dart_bizno_rel }}</strong> (<strong>{{ dart_bizno_count }}</strong>건).
-        매칭 리스트: <strong>{{ dart_master_rel }}</strong> — <code>python build_dart_registry.py</code> 로 생성.
-        {% if stock_gap and stock_gap.input_total %}
-        <br />
-        종목 코드 공란: <strong>{{ stock_gap.input_missing_stock }}</strong> / {{ stock_gap.input_total }}건
-        · 마스터 내 종목 공란: <strong>{{ stock_gap.master_rows_empty_stock }}</strong>건
-        {% if stock_gap.master_rows_total %}(/ CSV {{ stock_gap.master_rows_total }}행){% endif %}
-        — <code>python build_dart_registry.py --list-incomplete</code>
-        {% endif %}
         {% endif %}
       </p>
       {% if error %}
       <div class="alert">{{ error }}</div>
       {% endif %}
-      <form method="post" class="analyze-form">
+      <div id="analyze-client-error" class="alert analyze-client-alert" hidden></div>
+      <form method="post" class="analyze-form" id="analyze-form" action="{{ url_for('index') }}" novalidate data-stream-url="{{ url_for('analyze_stream') }}">
         <label class="sr-only" for="csv_text">CSV 본문</label>
         <textarea id="csv_text" name="csv_text" class="csv-raw-internal" rows="8" spellcheck="false" aria-hidden="true" tabindex="-1">{{ csv_text }}</textarea>
 
@@ -79,133 +71,172 @@
         {% endif %}
 
         <div class="form-submit-wrap">
-          <button type="submit" class="btn-primary">분석 실행</button>
+          <button type="submit" class="btn-primary" id="analyze-submit-btn">분석 실행</button>
+        </div>
+        <div class="analyze-progress-panel" id="analyze-progress-panel" hidden>
+          <div class="analyze-progress-label" id="analyze-progress-label" aria-live="polite">분석 준비 중…</div>
+          <div class="analyze-progress-bar-wrap">
+            <div class="analyze-progress-bar" id="analyze-progress-bar"></div>
+          </div>
+          <div class="analyze-progress-meta muted" id="analyze-progress-meta"></div>
         </div>
       </form>
     </section>
 
-    {% if results %}
-    {% set sorted_results = results|sort(attribute='composite_score', reverse=true) %}
-    <section class="panel sheet">
-      <h2>위험 상위 10개 업체</h2>
-      <p class="chart-intro">복합 위험 점수(0~100)와 추정 이탈 확률을 같은 스케일 막대로 비교했습니다.</p>
-      <div class="top10-chart">
-        {% for r in sorted_results %}
-          {% if loop.index <= 10 %}
-          <article class="chart-card">
-            <div class="chart-card-head">
-              <span class="chart-rank">{{ loop.index }}</span>
-              <div class="chart-title-block">
-                <div class="chart-company">{{ r.company_name or '(이름 없음)' }}</div>
-                <div class="chart-meta">
-                  {% if r.ticker_available and r.ticker %}<span>종목 {{ r.ticker }}</span>{% endif %}
-                  <span>{{ r.business_number }}</span>
-                </div>
-              </div>
-              <div class="chart-numbers">
-                <span class="num-score">{{ '%.1f'|format(r.composite_score) }}</span>
-                <span class="num-slash">/</span>
-                <span class="num-churn">{{ '%.1f%%'|format(r.estimated_churn_probability * 100) }}</span>
-              </div>
-            </div>
-            <div class="meter-row">
-              <span class="meter-cap">복합 위험</span>
-              <div class="meter-track" role="presentation">
-                <div class="meter-fill meter-score" style="width: {{ [100, r.composite_score]|min }}%;"></div>
-              </div>
-            </div>
-            <div class="meter-row">
-              <span class="meter-cap">추정 이탈 확률</span>
-              <div class="meter-track" role="presentation">
-                <div class="meter-fill meter-churn" style="width: {{ [100, r.estimated_churn_probability * 100]|min }}%;"></div>
-              </div>
-            </div>
-          </article>
-          {% endif %}
-        {% endfor %}
-      </div>
-    </section>
-
-    <section class="panel sheet">
-      <h2>전체 결과 (위험 점수 높은 순)</h2>
-      {% if results_ticker_missing_count %}
-      <p class="summary-gap">
-        이번 분석에서 종목 미반영 시장 보조값(M) 적용: <strong>{{ results_ticker_missing_count }}</strong> / {{ results|length }}건
-      </p>
-      {% endif %}
-      <div class="table-wrap">
-        <table class="sheet-data-table result-table">
-          <thead>
-            <tr>
-              <th>업체명</th>
-              <th>사업자번호</th>
-              <th>종목</th>
-              <th>복합점수</th>
-              <th>추정이탈</th>
-              <th>N</th>
-              <th>M</th>
-              <th>C</th>
-              <th>비고</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for r in sorted_results %}
-            <tr class="{% if not r.ticker_available %}row-ticker-gap{% endif %} {% if r.composite_score >= 60 %}risk-high{% elif r.composite_score >= 45 %}risk-mid{% endif %}">
-              <td class="td-name">{{ r.company_name }}</td>
-              <td class="td-mono">{{ r.business_number }}</td>
-              <td class="td-mono nowrap">
-                {% if r.ticker %}<span class="ticker">{{ r.ticker }}</span>
-                {% else %}<span class="ticker-absent">종목 없음</span>{% endif %}
-              </td>
-              <td class="td-num">{{ '%.1f'|format(r.composite_score) }}</td>
-              <td class="td-num">{{ '%.1f%%'|format(r.estimated_churn_probability * 100) }}</td>
-              <td class="td-num">{{ '%.2f'|format(r.estimate.news_risk) }}</td>
-              <td class="td-num">
-                {{ '%.2f'|format(r.estimate.market_risk) }}
-                {% if not r.market_observed %}<span class="m-note">보조값</span>{% endif %}
-              </td>
-              <td class="td-num">{{ '%.2f'|format(r.estimate.credit_risk) }}</td>
-              <td class="td-notes">
-                {% if r.dart and r.dart.company_profile and r.dart.company_profile.corp_name %}
-                  <span class="dart-tag">개황</span>
-                  {{ r.dart.company_profile.corp_name[:28] }}
-                  {% if r.dart.corp_code %}·{{ r.dart.corp_code }}{% endif %}
-                  <br/>
-                {% endif %}
-                {% if r.dart and r.dart.disclosure_sample %}
-                  <span class="dart-tag">공시</span>
-                  {{ r.dart.disclosure_sample[0][:36] }}…<br/>
-                {% endif %}
-                {% if r.news.get('articles') %}
-                  {% for a in r.news.articles[:3] %}
-                    {% if a.get('link') %}
-                      <span class="dart-tag">뉴스</span>
-                      <a class="news-link" href="{{ a.link }}" target="_blank" rel="noopener noreferrer">{{ (a.title or '기사')[:40] }}{% if a.title and (a.title|length) > 40 %}…{% endif %}</a><br/>
-                    {% endif %}
-                  {% endfor %}
-                {% elif r.news.sample_titles %}
-                  <span class="dart-tag">뉴스</span> {{ r.news.sample_titles[0][:36] }}…
-                {% endif %}
-                {% if r.dart and r.dart.message %}<span class="muted">{{ r.dart.message }}</span>{% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel muted-box sheet">
-      <h3>해석 안내</h3>
-      <ul>
-        <li>복합 점수는 0~100 스케일입니다.</li>
-        <li>종목 코드가 없거나 비상장인 경우 주가가 반영되지 않아 시장(M)에 보조값이 들어 갈 수 있습니다. 점검: <code>python build_dart_registry.py --list-incomplete</code></li>
-        <li>DART 연동에는 <strong>공시번호</strong>(8자리)가 유리합니다. <code>{{ dart_bizno_rel }}</code> → <code>{{ dart_master_rel }}</code></li>
-        <li>유사 상호 뉴스는 오탐이 있을 수 있으니 검증이 필요합니다.</li>
-      </ul>
-    </section>
+    <div id="analysis-results-host">
+    {% if sorted_results %}
+    {% include 'partials/analysis_results.html' %}
     {% endif %}
-  </main>
+    </div>
 
+    </main>
+
+<script>
+(function () {
+  function supportsStreamFetch() {
+    return typeof Response !== "undefined"
+      && typeof ReadableStream !== "undefined"
+      && typeof fetch === "function";
+  }
+
+  function fmtEtaSeconds(sec) {
+    var x = Math.max(0, Math.ceil(Number(sec) || 0));
+    if (x < 60) {
+      return "약 " + x + "초";
+    }
+    var m = Math.floor(x / 60);
+    var s = x % 60;
+    return "약 " + m + "분 " + s + "초";
+  }
+
+  var form = document.getElementById("analyze-form");
+  if (!form || !supportsStreamFetch()) return;
+
+  var url = form.getAttribute("data-stream-url");
+  if (!url) return;
+
+  var btn = document.getElementById("analyze-submit-btn");
+  var bar = document.getElementById("analyze-progress-bar");
+  var lbl = document.getElementById("analyze-progress-label");
+  var meta = document.getElementById("analyze-progress-meta");
+  var panel = document.getElementById("analyze-progress-panel");
+  var host = document.getElementById("analysis-results-host");
+  var clientErr = document.getElementById("analyze-client-error");
+
+  function showClientError(msg) {
+    if (!clientErr) return;
+    clientErr.textContent = msg;
+    clientErr.hidden = false;
+  }
+
+  function hideClientError() {
+    if (!clientErr) return;
+    clientErr.textContent = "";
+    clientErr.hidden = true;
+  }
+
+  form.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    hideClientError();
+
+    var ta = document.getElementById("csv_text");
+    var csv = ta ? ta.value : "";
+
+    if (panel) panel.hidden = false;
+    if (bar) bar.style.width = "0%";
+    if (lbl) lbl.textContent = "분석을 시작했습니다.";
+    if (meta) meta.textContent = "";
+
+    btn.disabled = true;
+
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/x-ndjson" },
+      body: JSON.stringify({ csv_text: csv }),
+      credentials: "same-origin",
+    })
+      .then(function (resp) {
+        if (!resp.ok || !resp.body) {
+          throw new Error("서버 요청 오류 (" + resp.status + ")");
+        }
+        var reader = resp.body.getReader();
+        var dec = new TextDecoder();
+        var buf = "";
+
+        function pump() {
+          return reader.read().then(function (chunk) {
+            var done = chunk.done;
+            var value = chunk.value;
+            buf += dec.decode(value || new Uint8Array(), { stream: !done });
+            var lines = buf.split("\n");
+            buf = lines.pop() || "";
+
+            for (var i = 0; i < lines.length; i++) {
+              var trimmed = lines[i].trim();
+              if (!trimmed) continue;
+              try {
+                var data = JSON.parse(trimmed);
+                if (data.type === "progress") {
+                  var fracPct = typeof data.fraction === "number"
+                    ? data.fraction * 100
+                    : (data.pct != null ? Number(data.pct) : 0);
+                  if (bar) bar.style.width = Math.min(100, Math.max(0, fracPct)).toFixed(1) + "%";
+                  var cur = data.current != null ? data.current : "?";
+                  var tot = data.total != null ? data.total : "?";
+                  if (lbl) lbl.textContent = "업체 분석 중: " + cur + " / " + tot + "건";
+                  if (meta) {
+                    var parts = [];
+                    parts.push("경과 " + (data.elapsed_sec != null ? data.elapsed_sec : "0") + "초");
+                    var n = Number(data.total) || 0;
+                    var cc = Number(data.current) || 0;
+                    if (n > 0 && cc >= n) {
+                      parts.push("완료 직전");
+                    } else if (data.eta_sec != null && data.eta_sec >= 0) {
+                      parts.push("예상 남은 시간 " + fmtEtaSeconds(data.eta_sec));
+                    }
+                    meta.textContent = parts.join(" · ");
+                  }
+                  continue;
+                }
+                if (data.type === "error") {
+                  showClientError(data.message || "분석 오류");
+                  if (panel) panel.hidden = true;
+                  continue;
+                }
+                if (data.type === "done" && data.fragment != null && host) {
+                  if (bar) bar.style.width = "100%";
+                  host.innerHTML = data.fragment;
+                  if (lbl) lbl.textContent = "분석 완료";
+                  if (meta) meta.textContent = "";
+                  if (panel) panel.hidden = true;
+                  try {
+                    host.scrollIntoView({ behavior: "smooth", block: "start" });
+                  } catch (_) {
+                    host.scrollIntoView(true);
+                  }
+                  continue;
+                }
+              } catch (e2) {
+                showClientError(e2.message || String(e2));
+                if (panel) panel.hidden = true;
+              }
+            }
+
+            return done ? undefined : pump();
+          });
+        }
+
+        return pump();
+      })
+      .catch(function (err) {
+        showClientError(err.message || String(err));
+        if (panel) panel.hidden = true;
+      })
+      .finally(function () {
+        btn.disabled = false;
+      });
+  });
+})();
+</script>
 </body>
 </html>

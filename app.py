@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import csv
 import io
+import json as json_std
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 try:
     from dotenv import load_dotenv
@@ -17,14 +18,13 @@ try:
 except ImportError:
     pass
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 from customer_analyzer import analyze_customer
 from services.dart_service import (
     DART_BIZ_MASTER_CSV,
     DART_BIZNO_INPUT_LIST,
     dart_bizno_input_customer_rows,
-    dart_master_stock_gap_stats,
     load_biz_registry,
     load_bizno_input_numbers,
     normalize_disclosure_corp_code,
@@ -145,13 +145,33 @@ def csv_sheet_preview(csv_text: str, max_display_rows: int = 50) -> dict[str, An
     return meta
 
 
+def dart_template_path_vars() -> dict[str, str]:
+    return {
+        "dart_bizno_rel": str(DART_BIZNO_INPUT_LIST.relative_to(BASE)).replace("\\", "/"),
+        "dart_master_rel": str(DART_BIZ_MASTER_CSV.relative_to(BASE)).replace("\\", "/"),
+    }
+
+
+def sorted_results_for_template(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    return sorted(rows or [], key=lambda r: float(r.get("composite_score") or 0), reverse=True)
+
+
+def analysis_results_fragment_kwargs(results_payload: list[dict[str, Any]]) -> dict[str, Any]:
+    results_with_gaps = [r for r in results_payload if not r.get("ticker_available")]
+    return {
+        **dart_template_path_vars(),
+        "sorted_results": sorted_results_for_template(results_payload),
+        "results": results_payload,
+        "results_ticker_missing_count": len(results_with_gaps),
+    }
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     results = []
     err = None
     raw_csv = initial_csv_text_for_get() if request.method == "GET" else ""
     dart_bizno_count = len(load_bizno_input_numbers())
-    stock_gap = dart_master_stock_gap_stats()
 
     if request.method == "POST":
         raw_csv = request.form.get("csv_text") or ""
@@ -177,19 +197,21 @@ def index():
             except Exception as e:
                 err = str(e)
 
-    results_with_gaps = [r for r in results if not r.get("ticker_available")]
     csv_preview = csv_sheet_preview(raw_csv)
+    ticker_missing_ct = len([r for r in results if not r.get("ticker_available")])
+
+    ctx = dart_template_path_vars()
+    sorted_rows = sorted_results_for_template(results)
     return render_template(
         "index.html",
         results=results,
-        results_ticker_missing_count=len(results_with_gaps),
+        sorted_results=sorted_rows,
+        results_ticker_missing_count=ticker_missing_ct,
         error=err,
         csv_text=raw_csv,
         csv_preview=csv_preview,
         dart_bizno_count=dart_bizno_count,
-        stock_gap=stock_gap,
-        dart_bizno_rel=str(DART_BIZNO_INPUT_LIST.relative_to(BASE)).replace("\\", "/"),
-        dart_master_rel=str(DART_BIZ_MASTER_CSV.relative_to(BASE)).replace("\\", "/"),
+        **ctx,
         formula_summary={
             "weights": "S = 0.20·E + 0.30·N + 0.25·M + 0.25·C",
             "churn_prob": "P = σ(-2 + 4·S),  σ(x)=1/(1+e^{-x})",
@@ -238,6 +260,76 @@ def api_analyze():
             }
         )
     return jsonify({"results": clean})
+
+
+@app.route("/api/analyze_stream", methods=["POST"])
+def analyze_stream():
+    """NDJSON 줄 단위 진행(progress) 후 마지막에 렌더된 결과 HTML(fragment) 포함."""
+    body = request.get_json(force=True, silent=True) or {}
+    raw = body.get("csv_text")
+    csv_text = raw if isinstance(raw, str) else ""
+
+    def chunks() -> Iterator[bytes]:
+        try:
+            customers = parse_csv_text(csv_text.strip())
+            if not customers:
+                payload = {
+                    "type": "error",
+                    "message": "유효한 행이 없습니다. 사업자번호(10자리) 또는 업체명+사업자번호 컬럼을 확인하세요.",
+                }
+                yield (json_std.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+                return
+
+            gap = float(os.environ.get("DART_ANALYZE_SLEEP_SEC") or "0")
+            n = len(customers)
+            t0 = time.perf_counter()
+            results_payload: list[dict[str, Any]] = []
+
+            for i, c in enumerate(customers):
+                if i and gap > 0:
+                    time.sleep(gap)
+                try:
+                    row = analyze_customer(
+                        c.get("company_name") or "",
+                        c.get("business_number") or "",
+                        c.get("ticker_override"),
+                        c.get("dart_corp_code"),
+                    )
+                    results_payload.append(row)
+                except Exception as e:
+                    err = {"type": "error", "message": f"{i + 1}번째 행 분석 오류: {e}"}
+                    yield (json_std.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
+                    return
+
+                elapsed = time.perf_counter() - t0
+                cur = len(results_payload)
+                rate = elapsed / cur if cur else 0.0
+                eta_sec = max(0.0, rate * (n - cur))
+                prog = {
+                    "type": "progress",
+                    "current": cur,
+                    "total": n,
+                    "fraction": cur / n if n else 1.0,
+                    "pct": round(100.0 * cur / n, 1) if n else 100.0,
+                    "elapsed_sec": round(elapsed, 1),
+                    "eta_sec": round(eta_sec, 1),
+                }
+                yield (json_std.dumps(prog, ensure_ascii=False) + "\n").encode("utf-8")
+
+            frag_ctx = analysis_results_fragment_kwargs(results_payload)
+            fragment = render_template("partials/analysis_results.html", **frag_ctx)
+            done_payload = {"type": "done", "fragment": fragment}
+            yield (json_std.dumps(done_payload, ensure_ascii=False) + "\n").encode("utf-8")
+
+        except Exception as e:
+            err = {"type": "error", "message": str(e)}
+            yield (json_std.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
+
+    return Response(
+        stream_with_context(chunks()),
+        mimetype="application/x-ndjson; charset=utf-8",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 def main():

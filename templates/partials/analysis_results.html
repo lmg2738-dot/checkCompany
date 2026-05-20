@@ -1,0 +1,118 @@
+    <section class="panel sheet">
+      <h2>위험 상위 10개 업체</h2>
+      <p class="chart-intro">복합 위험 점수(0~100)와 추정 이탈 확률을 같은 스케일 막대로 비교했습니다.</p>
+      <div class="top10-chart">
+        {% for r in sorted_results %}
+          {% if loop.index <= 10 %}
+          <article class="chart-card">
+            <div class="chart-card-head">
+              <span class="chart-rank">{{ loop.index }}</span>
+              <div class="chart-title-block">
+                <div class="chart-company">{{ r.company_name or '(이름 없음)' }}</div>
+                <div class="chart-meta">
+                  {% if r.ticker_available and r.ticker %}<span>종목 {{ r.ticker }}</span>{% endif %}
+                  <span>{{ r.business_number }}</span>
+                </div>
+              </div>
+              <div class="chart-numbers">
+                <span class="num-score">{{ '%.1f'|format(r.composite_score) }}</span>
+                <span class="num-slash">/</span>
+                <span class="num-churn">{{ '%.1f%%'|format(r.estimated_churn_probability * 100) }}</span>
+              </div>
+            </div>
+            <div class="meter-row">
+              <span class="meter-cap">복합 위험</span>
+              <div class="meter-track" role="presentation">
+                <div class="meter-fill meter-score" style="width: {{ [100, r.composite_score]|min }}%;"></div>
+              </div>
+            </div>
+            <div class="meter-row">
+              <span class="meter-cap">추정 이탈 확률</span>
+              <div class="meter-track" role="presentation">
+                <div class="meter-fill meter-churn" style="width: {{ [100, r.estimated_churn_probability * 100]|min }}%;"></div>
+              </div>
+            </div>
+          </article>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="panel sheet">
+      <h2>전체 결과 (위험 점수 높은 순)</h2>
+      {% if results_ticker_missing_count %}
+      <p class="summary-gap">
+        이번 분석에서 종목 미반영 시장 보조값(M) 적용: <strong>{{ results_ticker_missing_count }}</strong> / {{ results|length }}건
+      </p>
+      {% endif %}
+      <div class="table-wrap">
+        <table class="sheet-data-table result-table">
+          <thead>
+            <tr>
+              <th>업체명</th>
+              <th>사업자번호</th>
+              <th>종목</th>
+              <th>복합점수</th>
+              <th>추정이탈</th>
+              <th>N</th>
+              <th>M</th>
+              <th>C</th>
+              <th>비고</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in sorted_results %}
+            <tr class="{% if not r.ticker_available %}row-ticker-gap{% endif %} {% if r.composite_score >= 60 %}risk-high{% elif r.composite_score >= 45 %}risk-mid{% endif %}">
+              <td class="td-name">{{ r.company_name }}</td>
+              <td class="td-mono">{{ r.business_number }}</td>
+              <td class="td-mono nowrap">
+                {% if r.ticker %}<span class="ticker">{{ r.ticker }}</span>
+                {% else %}<span class="ticker-absent">종목 없음</span>{% endif %}
+              </td>
+              <td class="td-num">{{ '%.1f'|format(r.composite_score) }}</td>
+              <td class="td-num">{{ '%.1f%%'|format(r.estimated_churn_probability * 100) }}</td>
+              <td class="td-num">{{ '%.2f'|format(r.estimate.news_risk) }}</td>
+              <td class="td-num">
+                {{ '%.2f'|format(r.estimate.market_risk) }}
+                {% if not r.market_observed %}<span class="m-note">보조값</span>{% endif %}
+              </td>
+              <td class="td-num">{{ '%.2f'|format(r.estimate.credit_risk) }}</td>
+              <td class="td-notes">
+                {% if r.dart and r.dart.company_profile and r.dart.company_profile.corp_name %}
+                  <span class="dart-tag">개황</span>
+                  {{ r.dart.company_profile.corp_name[:28] }}
+                  {% if r.dart.corp_code %}·{{ r.dart.corp_code }}{% endif %}
+                  <br/>
+                {% endif %}
+                {% if r.dart and r.dart.disclosure_sample %}
+                  <span class="dart-tag">공시</span>
+                  {{ r.dart.disclosure_sample[0][:36] }}…<br/>
+                {% endif %}
+                {% if r.news.get('articles') %}
+                  {% for a in r.news.articles[:3] %}
+                    {% if a.get('link') %}
+                      <span class="dart-tag">뉴스</span>
+                      <a class="news-link" href="{{ a.link }}" target="_blank" rel="noopener noreferrer">{{ (a.title or '기사')[:40] }}{% if a.title and (a.title|length) > 40 %}…{% endif %}</a><br/>
+                    {% endif %}
+                  {% endfor %}
+                {% elif r.news.sample_titles %}
+                  <span class="dart-tag">뉴스</span> {{ r.news.sample_titles[0][:36] }}…
+                {% endif %}
+                {% if r.dart and r.dart.message %}<span class="muted">{{ r.dart.message }}</span>{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel muted-box sheet">
+      <h3>해석 안내</h3>
+      <ul>
+        <li>복합 점수는 0~100 스케일입니다.</li>
+        <li>종목 코드가 없거나 비상장인 경우 주가가 반영되지 않아 시장(M)에 보조값이 들어 갈 수 있습니다. 점검: <code>python build_dart_registry.py --list-incomplete</code></li>
+        <li>DART 연동에는 <strong>공시번호</strong>(8자리)가 유리합니다. <code>{{ dart_bizno_rel }}</code> → <code>{{ dart_master_rel }}</code></li>
+        <li>유사 상호 뉴스는 오탐이 있을 수 있으니 검증이 필요합니다.</li>
+      </ul>
+    </section>
