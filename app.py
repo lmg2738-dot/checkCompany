@@ -171,7 +171,6 @@ def index():
     results = []
     err = None
     raw_csv = initial_csv_text_for_get() if request.method == "GET" else ""
-    dart_bizno_count = len(load_bizno_input_numbers())
 
     if request.method == "POST":
         raw_csv = request.form.get("csv_text") or ""
@@ -210,7 +209,6 @@ def index():
         error=err,
         csv_text=raw_csv,
         csv_preview=csv_preview,
-        dart_bizno_count=dart_bizno_count,
         **ctx,
         formula_summary={
             "weights": "S = 0.20·E + 0.30·N + 0.25·M + 0.25·C",

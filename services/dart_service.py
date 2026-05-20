@@ -952,7 +952,7 @@ def dart_enrich(
             "company_profile": None,
             "credit_risk_boost": 0.0,
             "financial_stress": 0.0,
-            "message": "DART_API_KEY 미설정 — .env 또는 환경변수에 인증키 설정",
+            "message": None,
         }
 
     row, prof, msg = resolve_corp_code(

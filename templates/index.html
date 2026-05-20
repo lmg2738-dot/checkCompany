@@ -12,7 +12,7 @@
     <h1>고객 이탈·이슈 위험 리포트</h1>
     <p class="sub">
       업체명·사업자번호 리스트를 넣으면 <strong>뉴스(RSS)</strong>, <strong>주가(yfinance)</strong>,
-      <strong>전자공시 Open DART</strong>(기업개황·공시검색·주요재무지표, <code>DART_API_KEY</code>)를 반영해 복합 위험과 추정 이탈 확률을 제공합니다.
+      <strong>전자공시 Open DART</strong>(기업개황·공시검색·주요재무지표)를 반영해 복합 위험과 추정 이탈 확률을 제공합니다.
     </p>
     <div class="formula formula-internal" aria-hidden="true">
       <span>복합 위험:</span> <code>{{ formula_summary.weights }}</code>
@@ -23,12 +23,6 @@
 
     <section class="panel sheet">
       <h2>고객 리스트 (CSV 입력)</h2>
-      <p class="hint">
-        컬럼 예: <code>업체명</code>, <code>사업자등록번호</code>, (선택) <code>종목코드</code>.<br />
-        {% if dart_bizno_count %}
-        사업자 입력: <strong>{{ dart_bizno_rel }}</strong> (<strong>{{ dart_bizno_count }}</strong>건).
-        {% endif %}
-      </p>
       {% if error %}
       <div class="alert">{{ error }}</div>
       {% endif %}

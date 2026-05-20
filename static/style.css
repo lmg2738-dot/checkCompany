@@ -75,20 +75,6 @@ body {
   font-weight: 700;
 }
 
-.hint {
-  color: var(--muted);
-  font-size: 0.88rem;
-  margin-bottom: 1rem;
-}
-
-.hint code {
-  background: #eef2f8;
-  padding: 0.1rem 0.35rem;
-  border-radius: 4px;
-  font-size: 0.84rem;
-  color: #2e3f55;
-}
-
 .sr-only {
   position: absolute;
   width: 1px;
