@@ -13,4 +13,5 @@ dependencies = [
 ]
 
 [tool.vercel]
-entrypoint = "main:app"
+# api/index.py 의 Flask 인스턴스 (vercel.json rewrites 와 함께 사용)
+entrypoint = "api.index:app"

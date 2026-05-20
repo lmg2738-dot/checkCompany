@@ -31,10 +31,16 @@ from services.dart_service import (
 )
 from services.news_rss import normalize_biz_number
 
-app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024  # 2MB
-
 BASE = Path(__file__).resolve().parent
+
+# 서버리스(Vercel) 번들에서도 템플릿·정적 경로를 확실히 잡기 위해 절대 경로 지정
+app = Flask(
+    __name__,
+    template_folder=str(BASE / "templates"),
+    static_folder=str(BASE / "static"),
+    static_url_path="/static",
+)
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024  # 2MB
 
 _SAMPLE_CSV_PATH = BASE / "data" / "sample_customers.csv"
 

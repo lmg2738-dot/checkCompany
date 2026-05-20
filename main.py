@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Vercel Fluid/백엔드용 기본 진입점.
-
-공식 예제는 main.py 에 Flask 인스턴스 `app` 을 두는 패턴입니다.
-https://github.com/vercel/vercel/tree/main/examples/flask
+Vercel Fluid/로컬 공용: 로컬 실행은 여기서 하고,
+원격(Vercel)은 api/index.py + vercel.json rewrites 를 진입으로 씁니다.
 """
 from __future__ import annotations
 
