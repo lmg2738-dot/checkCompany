@@ -27,10 +27,16 @@ body {
   line-height: 1.55;
 }
 
-.hero {
-  padding: 2rem 1.5rem 1.25rem;
+.layout-main {
   max-width: 1100px;
   margin: 0 auto;
+  padding: 0 1.5rem 2.5rem;
+  box-sizing: border-box;
+}
+
+.layout-main > .hero.panel.sheet {
+  margin-top: 1.25rem;
+  padding: 2rem 1.5rem 1.35rem;
 }
 
 .hero h1 {
@@ -46,26 +52,9 @@ body {
   font-size: 0.95rem;
 }
 
-.formula {
-  margin-top: 1rem;
-  padding: 0.75rem 1rem;
-  background: var(--accent-soft);
-  border: 1px solid #c8ddf5;
-  border-radius: 8px;
-  font-size: 0.875rem;
-  color: var(--text);
-}
-
-.formula code {
-  color: #0b3e7a;
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-
-main {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 0 1.5rem 2.5rem;
+/* 내부 참조용 수식 블록 — 화면 비표시 (.formula-internal) */
+.formula.formula-internal {
+  display: none !important;
 }
 
 .sheet {
