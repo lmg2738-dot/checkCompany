@@ -412,6 +412,11 @@ table.sheet-data-table {
   border-radius: 6px;
 }
 
+.summary-gap-below-table {
+  margin-top: 1rem;
+  margin-bottom: 0;
+}
+
 .table-wrap {
   overflow-x: auto;
   border: 1px solid var(--border);

@@ -40,11 +40,6 @@
 
     <section class="panel sheet">
       <h2>전체 결과 (위험 점수 높은 순)</h2>
-      {% if results_ticker_missing_count %}
-      <p class="summary-gap">
-        이번 분석에서 종목 미반영 시장 보조값(M) 적용: <strong>{{ results_ticker_missing_count }}</strong> / {{ results|length }}건
-      </p>
-      {% endif %}
       <div class="table-wrap">
         <table class="sheet-data-table result-table">
           <thead>
@@ -105,6 +100,11 @@
           </tbody>
         </table>
       </div>
+      {% if results_ticker_missing_count %}
+      <p class="summary-gap summary-gap-below-table">
+        이번 분석에서 종목 미반영 시장 보조값(M) 적용: <strong>{{ results_ticker_missing_count }}</strong> / {{ results|length }}건
+      </p>
+      {% endif %}
     </section>
 
     <section class="panel muted-box sheet">
