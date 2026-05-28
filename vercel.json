@@ -1,6 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "pip install -r requirements.txt",
+  "crons": [
+    {
+      "path": "/api/cron/disclosure-refresh",
+      "schedule": "0 1 * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/(.*)",

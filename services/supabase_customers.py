@@ -147,6 +147,32 @@ def customers_as_analyze_dicts(rows: list[dict[str, Any]] | None = None) -> list
     return out
 
 
+def is_missing_disclosure_code(raw: str | None) -> bool:
+    cc = normalize_disclosure_corp_code(raw or "")
+    return len(cc) != 8
+
+
+def fetch_rows_missing_disclosure(
+    *,
+    force_refresh: bool = False,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """disclosure_corp_code 가 비었거나 8자리가 아닌 customers 행."""
+    rows = fetch_all_customer_rows(force_refresh=force_refresh)
+    missing = [
+        r
+        for r in rows
+        if is_missing_disclosure_code(str(r.get("disclosure_corp_code") or ""))
+    ]
+    if limit is not None and limit > 0:
+        return missing[:limit]
+    return missing
+
+
+def count_missing_disclosure(*, force_refresh: bool = False) -> int:
+    return len(fetch_rows_missing_disclosure(force_refresh=force_refresh))
+
+
 def filter_customers_with_disclosure(
     customers: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int]:

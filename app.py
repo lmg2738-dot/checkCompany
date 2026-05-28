@@ -262,6 +262,48 @@ def analysis_results_fragment_kwargs(
     }
 
 
+def _cron_authorized() -> bool:
+    expected = (os.environ.get("CRON_SECRET") or "").strip()
+    if not expected:
+        return True
+    auth = (request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+    else:
+        token = auth
+    return token == expected
+
+
+@app.route("/api/cron/disclosure-refresh", methods=["GET", "POST"])
+def cron_disclosure_refresh():
+    """
+    매일 오전 10시(KST) Vercel Cron — 공시번호 없는 customers 를 DART로 보강.
+    CRON_SECRET 설정 시: Authorization: Bearer <CRON_SECRET>
+    """
+    if not _cron_authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    if supabase_customers is None or not supabase_customers.is_configured():
+        return jsonify({"ok": False, "error": "supabase not configured"}), 503
+
+    from services.customer_enrichment import run_disclosure_refresh_batch
+
+    try:
+        pending = supabase_customers.fetch_rows_missing_disclosure(force_refresh=True)
+        stats = run_disclosure_refresh_batch(pending)
+        still_missing = supabase_customers.count_missing_disclosure(force_refresh=True)
+        return jsonify(
+            {
+                "ok": True,
+                "schedule_note": "Vercel Cron 01:00 UTC = 10:00 KST",
+                **stats,
+                "still_missing_disclosure": still_missing,
+            }
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/health")
 def api_health():
     """배포·환경 변수 확인(시크릿 값은 노출하지 않음)."""
@@ -277,6 +319,9 @@ def api_health():
             try:
                 rows = supabase_customers.fetch_all_customer_rows(force_refresh=True)
                 body["supabase"]["customer_row_count"] = len(rows)
+                body["supabase"]["missing_disclosure_count"] = (
+                    supabase_customers.count_missing_disclosure(force_refresh=True)
+                )
             except Exception as e:
                 body["supabase"]["fetch_error"] = str(e)[:300]
     else:
