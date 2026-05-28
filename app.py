@@ -288,10 +288,60 @@ def _cron_authorized() -> bool:
     return token == expected
 
 
+@app.route("/api/cron/daily-risk-email", methods=["GET", "POST"])
+def cron_daily_risk_email():
+    """
+    매일 오전 10시(KST) Vercel Cron — 전체 분석 후 위험 상위 10개를 Resend 로 발송.
+    CRON_SECRET 설정 시: Authorization: Bearer <CRON_SECRET>
+    """
+    if not _cron_authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    from services.bulk_analyze import run_bulk_customer_analysis
+    from services.daily_risk_email import email_subject, send_daily_risk_report
+    from services.resend_client import resend_configured
+
+    if not resend_configured():
+        return jsonify(
+            {
+                "ok": False,
+                "error": "resend not configured (RESEND_API_KEY, RESEND_FROM, RESEND_TO)",
+            }
+        ), 503
+
+    try:
+        customers, prep = prepare_customers_for_analysis("")
+        if not customers:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "no analyzable customers",
+                    "prep": prep,
+                }
+            ), 400
+
+        results = run_bulk_customer_analysis(customers)
+        sorted_rows = sorted_results_for_template(results)
+        mail = send_daily_risk_report(sorted_rows, prep_meta=prep)
+        return jsonify(
+            {
+                "ok": True,
+                "schedule_note": "Vercel Cron 01:00 UTC = 10:00 KST",
+                "subject": email_subject(),
+                "analyzed_count": len(results),
+                "emailed_top": min(10, len(sorted_rows)),
+                **mail,
+            }
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/cron/disclosure-refresh", methods=["GET", "POST"])
 def cron_disclosure_refresh():
     """
-    매일 오전 10시(KST) Vercel Cron — 공시번호 없는 customers 를 DART로 보강.
+    공시번호 없는 customers 를 DART로 보강 (수동·향후 Cron 재활성화용).
+    Vercel Hobby 는 Cron 1개만 허용 → vercel.json 에서는 비활성화됨.
     CRON_SECRET 설정 시: Authorization: Bearer <CRON_SECRET>
     """
     if not _cron_authorized():
@@ -340,6 +390,14 @@ def api_health():
                 body["supabase"]["fetch_error"] = str(e)[:300]
     else:
         body["supabase"] = {"supabase_ready": False}
+
+    try:
+        from services.resend_client import config_status
+
+        body["resend"] = config_status()
+    except Exception as e:
+        body["resend"] = {"resend_ready": False, "error": str(e)[:200]}
+
     return jsonify(body)
 
 

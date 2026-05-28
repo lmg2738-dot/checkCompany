@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>고객 이탈·이슈 위험 리포트</title>
+</head>
+<body style="margin:0;padding:0;background:#f7f9fc;font-family:'Segoe UI','Malgun Gothic',system-ui,sans-serif;color:#1a2332;line-height:1.55;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f9fc;padding:24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:720px;background:#ffffff;border:1px solid #d8dee9;border-radius:10px;overflow:hidden;">
+          <tr>
+            <td style="padding:28px 28px 20px;background:linear-gradient(180deg,#e8f1fc 0%,#ffffff 42%);">
+              <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;letter-spacing:-0.02em;color:#1a2332;">
+                고객 이탈·이슈 위험 리포트
+              </h1>
+              <p style="margin:0;font-size:13px;color:#5c6978;">{{ report_date }} · 자동 발송</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 28px 20px;">
+              <p style="margin:0 0 14px;font-size:15px;color:#2e4057;">
+                업체명·사업자번호 리스트를 넣으면 <strong>뉴스(RSS)</strong>, <strong>주가(yfinance)</strong>,
+                <strong>전자공시 Open DART</strong>(기업개황·공시검색·주요재무지표)를 반영해 복합 위험과 추정 이탈 확률을 제공합니다.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 28px 8px;">
+              <h2 style="margin:0 0 8px;font-size:17px;font-weight:700;color:#1a2332;">위험 상위 10개 업체</h2>
+              <p style="margin:0 0 16px;font-size:14px;color:#5c6978;">
+                복합 위험 점수(0~100)와 추정 이탈 확률을 같은 스케일 막대로 비교했습니다. 종목이 없는 업체는 M을 복합에 넣지 않고 N·C 비중을 키웁니다.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 20px 20px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
+                <thead>
+                  <tr style="background:#f0f4fa;">
+                    <th align="left" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">순위</th>
+                    <th align="left" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">업체명</th>
+                    <th align="left" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">사업자번호</th>
+                    <th align="left" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">종목</th>
+                    <th align="right" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">복합점수</th>
+                    <th align="right" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">추정이탈</th>
+                    <th align="right" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">N</th>
+                    <th align="right" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">M</th>
+                    <th align="right" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">C</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for r in top10 %}
+                  {% set score = r.composite_score or 0 %}
+                  {% set row_bg = '#fdecef' if score >= 60 else ('#fff6e9' if score >= 45 else '#ffffff') %}
+                  <tr style="background:{{ row_bg }};">
+                    <td style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-weight:700;color:#1a5fb4;">{{ loop.index }}</td>
+                    <td style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-weight:600;">{{ r.company_name or '(이름 없음)' }}</td>
+                    <td style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-family:Consolas,monospace;font-size:12px;">{{ r.business_number }}</td>
+                    <td style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-size:12px;">
+                      {% if r.ticker %}{{ r.ticker }}{% else %}<span style="color:#8a96a8;">종목 없음</span>{% endif %}
+                    </td>
+                    <td align="right" style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-weight:700;">{{ '%.1f'|format(score) }}</td>
+                    <td align="right" style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-weight:700;color:#c01c28;">{{ '%.1f%%'|format((r.estimated_churn_probability or 0) * 100) }}</td>
+                    <td align="right" style="padding:9px 8px;border-bottom:1px solid #e8edf4;">{{ '%.2f'|format(r.estimate.news_risk) }}</td>
+                    <td align="right" style="padding:9px 8px;border-bottom:1px solid #e8edf4;">
+                      {{ '%.2f'|format(r.estimate.market_risk) }}
+                      {% if not r.market_in_composite %}<br/><span style="font-size:10px;color:#8a96a8;">복합제외</span>{% endif %}
+                    </td>
+                    <td align="right" style="padding:9px 8px;border-bottom:1px solid #e8edf4;">{{ '%.2f'|format(r.estimate.credit_risk) }}</td>
+                  </tr>
+                  <tr>
+                    <td colspan="9" style="padding:0 8px 12px 8px;border-bottom:1px solid #e8edf4;">
+                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:11px;color:#5c6978;">
+                        <tr>
+                          <td width="88" style="padding:4px 0 2px;vertical-align:middle;">복합 위험</td>
+                          <td style="padding:4px 0 2px;vertical-align:middle;">
+                            <div style="height:8px;background:#e2e8f2;border-radius:999px;overflow:hidden;">
+                              <div style="height:8px;width:{{ [100, score]|min }}%;background:linear-gradient(90deg,#3584e4,#1a5fb4);border-radius:999px;"></div>
+                            </div>
+                          </td>
+                          <td width="48" align="right" style="padding:4px 0 2px;font-weight:600;">{{ '%.0f'|format(score) }}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding:2px 0 0;vertical-align:middle;">추정 이탈</td>
+                          <td style="padding:2px 0 0;vertical-align:middle;">
+                            <div style="height:8px;background:#e2e8f2;border-radius:999px;overflow:hidden;">
+                              <div style="height:8px;width:{{ [100, (r.estimated_churn_probability or 0) * 100]|min }}%;background:linear-gradient(90deg,#e01b24,#f66151);border-radius:999px;"></div>
+                            </div>
+                          </td>
+                          <td align="right" style="padding:2px 0 0;font-weight:600;color:#c01c28;">{{ '%.0f'|format((r.estimated_churn_probability or 0) * 100) }}%</td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 28px 24px;background:#f8fafc;border-top:1px solid #e8edf4;">
+              <div style="font-size:12px;color:#5c6978;">
+                <p style="margin:0 0 10px;"><strong style="color:#2e4057;">복합점수</strong> : 참여(E)·뉴스(N)·시장(M)·신용(C) 가중 합(기본 <code style="background:#eef2f8;padding:2px 6px;border-radius:4px;">{{ composite_weights_with_m }}</code>). <strong>종목 코드가 없으면</strong> <code style="background:#eef2f8;padding:2px 6px;border-radius:4px;">{{ composite_weights_no_m }}</code></p>
+                <p style="margin:0 0 10px;"><strong style="color:#2e4057;">추정이탈</strong> : 위 복합점수에서 로지스틱 변환으로 둔 <strong>이탈 가능성 추정값</strong>입니다(표에서는 %).</p>
+                <p style="margin:0 0 10px;"><strong style="color:#2e4057;">N</strong> : News — 뉴스 RSS 제목·요약 속 부정·재무 성격 키워드(0~1 소수).</p>
+                <p style="margin:0 0 10px;"><strong style="color:#2e4057;">M</strong> : Market — 주가 수익률·변동성(종목·시세 있을 때). <strong>종목 없음</strong>이면 표에만 참고(보조값)이고 <strong>복합점수에는 미반영</strong>.</p>
+                <p style="margin:0;"><strong style="color:#2e4057;">C</strong> : Credit — 재무 뉴스·Open DART 공시·재무지표(0~1 소수). 종목 없을 때 복합에서 N과 함께 비중이 커집니다.</p>
+                {% if analysis_prep and analysis_prep.count is not none %}
+                <p style="margin:14px 0 0;padding-top:12px;border-top:1px solid #e0e6ef;font-size:11px;color:#8a96a8;">
+                  분석 {{ analysis_prep.count }}건{% if analysis_prep.skipped_no_disclosure %} · 공시번호 없음 {{ analysis_prep.skipped_no_disclosure }}건 제외{% endif %}
+                </p>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

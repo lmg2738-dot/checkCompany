@@ -1,9 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "pip install -r requirements.txt",
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 300
+    }
+  },
   "crons": [
     {
-      "path": "/api/cron/disclosure-refresh",
+      "path": "/api/cron/daily-risk-email",
       "schedule": "0 1 * * *"
     }
   ],
