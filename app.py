@@ -62,14 +62,30 @@ def _supabase_ready() -> bool:
 
 def customer_source_context() -> dict[str, Any]:
     if _supabase_ready():
-        return {
+        ctx: dict[str, Any] = {
             "supabase_configured": True,
             "customer_data_source": "Supabase · customers 테이블",
         }
+        try:
+            ctx["missing_disclosure_count"] = supabase_customers.count_missing_disclosure()
+        except Exception:
+            ctx["missing_disclosure_count"] = None
+        return ctx
     return {
         "supabase_configured": False,
         "customer_data_source": f"로컬 · {DART_BIZ_MASTER_CSV.name}",
+        "missing_disclosure_count": None,
     }
+
+
+def csv_preview_fragment(csv_text: str) -> str:
+    preview = csv_sheet_preview(csv_text)
+    if preview.get("empty"):
+        return ""
+    return render_template(
+        "partials/csv_sheet_preview.html",
+        csv_preview=preview,
+    )
 
 
 def _filter_disclosure_fallback(
@@ -456,6 +472,45 @@ def api_analyze():
             }
         )
     return jsonify({"results": clean})
+
+
+@app.route("/api/enrich_stream", methods=["POST"])
+def enrich_stream():
+    """NDJSON — 공시번호 없는 customers 를 DART로 보강(10시 Cron 과 동일 로직)."""
+
+    def chunks() -> Iterator[bytes]:
+        try:
+            if not _supabase_ready():
+                err = {"type": "error", "message": "Supabase 가 설정되지 않았습니다."}
+                yield (json_std.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
+                return
+
+            from services.customer_enrichment import enrich_manual_max_items, iter_disclosure_refresh_events
+
+            pending = supabase_customers.fetch_rows_missing_disclosure(force_refresh=True)
+            manual_cap = enrich_manual_max_items()
+            max_items = manual_cap if manual_cap is not None else len(pending)
+
+            for ev in iter_disclosure_refresh_events(pending, max_items=max_items):
+                if ev.get("type") == "done":
+                    supabase_customers.invalidate_customer_cache()
+                    csv_text = supabase_customers.customers_to_csv_text()
+                    ev = {
+                        **ev,
+                        "csv_text": csv_text,
+                        "fragment": csv_preview_fragment(csv_text),
+                    }
+                yield (json_std.dumps(ev, ensure_ascii=False) + "\n").encode("utf-8")
+
+        except Exception as e:
+            err = {"type": "error", "message": str(e)}
+            yield (json_std.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
+
+    return Response(
+        stream_with_context(chunks()),
+        mimetype="application/x-ndjson; charset=utf-8",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @app.route("/api/analyze_stream", methods=["POST"])

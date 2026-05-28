@@ -193,7 +193,7 @@ def customers_to_csv_text(rows: list[dict[str, Any]] | None = None) -> str:
     w = csv.writer(buf, lineterminator="\n")
     w.writerow(["사업자번호", "업체명", "공시번호", "종목코드"])
     for r in raw:
-        biz = normalize_biz_number(str(row.get("business_number") or ""))
+        biz = normalize_biz_number(str(r.get("business_number") or ""))
         if len(biz) != 10:
             continue
         w.writerow(

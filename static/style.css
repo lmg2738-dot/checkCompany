@@ -39,8 +39,28 @@ body {
   padding: 2rem 1.5rem 1.35rem;
 }
 
+.hero-head-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.4rem;
+}
+
+.hero-head-row h1 {
+  margin: 0;
+  flex: 1 1 12rem;
+}
+
 .hero h1 {
   margin: 0 0 0.4rem;
+  font-size: 1.65rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.hero-head-row h1 {
   font-size: 1.65rem;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -232,6 +252,34 @@ table.sheet-data-table {
   opacity: 0.72;
   cursor: not-allowed;
   filter: none;
+}
+
+.btn-secondary {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 0.55rem 1.05rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--sheet);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.88rem;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(31, 45, 61, 0.08);
+}
+
+.btn-secondary:hover {
+  background: var(--accent-soft);
+  border-color: #b8c9e0;
+}
+
+.btn-secondary:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.enrich-stop-alert {
+  margin-top: 0.75rem;
 }
 
 .analyze-progress-panel {
