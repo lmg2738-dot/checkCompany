@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Any
@@ -130,6 +131,53 @@ def config_status() -> dict[str, Any]:
     }
 
 
+def _friendly_resend_error(
+    status_code: int,
+    detail: str,
+    *,
+    recipients: list[str],
+    sender: str,
+) -> str:
+    """Resend API 오류 → 화면에 보여줄 한글 안내."""
+    msg = detail
+    try:
+        js = json.loads(detail)
+        if isinstance(js, dict) and js.get("message"):
+            msg = str(js["message"])
+    except Exception:
+        pass
+
+    if status_code == 403 and (
+        "testing emails" in msg.lower() or "verify a domain" in msg.lower()
+    ):
+        allowed_hint = ""
+        m = re.search(
+            r"your own email address\s*\(([^)]+)\)",
+            msg,
+            re.IGNORECASE,
+        )
+        if m:
+            allowed_hint = m.group(1).strip()
+        lines = [
+            "Resend 무료·테스트 모드 제한입니다. onboarding@resend.dev 등 기본 발신 주소로는 "
+            "가입 시 등록한 이메일로만 보낼 수 있습니다.",
+        ]
+        if allowed_hint:
+            lines.append(
+                f"지금은 RESEND_TO 를 {allowed_hint} 로 두고 테스트하거나, "
+            )
+        else:
+            lines.append("지금은 RESEND_TO 를 Resend 가입 이메일로 두고 테스트하거나, ")
+        lines.append(
+            "다른 회사 메일(예: @cj.net)로내려면 resend.com/domains 에서 도메인을 인증하고 "
+            "RESEND_FROM 을 해당 도메인 주소(예: report@yourdomain.com)로 바꿔 주세요."
+        )
+        lines.append(f"(현재 발신: {sender}, 수신: {', '.join(recipients)})")
+        return " ".join(lines)
+
+    return f"Resend 발송 실패 HTTP {status_code}: {msg}"
+
+
 def send_html_email(
     *,
     subject: str,
@@ -174,7 +222,14 @@ def send_html_email(
     )
     if r.status_code >= 400:
         detail = (r.text or "")[:800]
-        raise RuntimeError(f"Resend 발송 실패 HTTP {r.status_code}: {detail}")
+        raise RuntimeError(
+            _friendly_resend_error(
+                r.status_code,
+                detail,
+                recipients=recipients,
+                sender=sender,
+            )
+        )
 
     try:
         body = r.json()
