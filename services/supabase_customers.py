@@ -1,13 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Supabase public.customers 마스터 (사업자번호·업체명·공시번호·종목코드)."""
+"""
+Supabase public.customers — PostgREST + requests (supabase 패키지 불필요).
+
+Vercel 서버리스에서 supabase-py 번들 누락을 피하기 위해 REST API만 사용합니다.
+"""
 
 from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import time
 from typing import Any
+
+import requests
 
 from services.dart_service import normalize_disclosure_corp_code
 from services.env_config import bootstrap_env
@@ -15,11 +22,14 @@ from services.news_rss import normalize_biz_number
 
 bootstrap_env()
 
-_client: Any = None
+_SESSION = requests.Session()
+_SESSION.headers.update({"User-Agent": "Mozilla/5.0 (compatible; ChurnMonitor/1.0)"})
+
 _rows_cache: list[dict[str, Any]] | None = None
 _rows_cache_at: float = 0.0
 _CACHE_TTL_SEC = 300.0
 _PAGE_SIZE = 1000
+_SELECT = "business_number,company_name,disclosure_corp_code,stock_code"
 
 
 def _supabase_url() -> str:
@@ -39,26 +49,41 @@ def is_configured() -> bool:
     return bool(_supabase_url() and _supabase_key())
 
 
+def config_status() -> dict[str, Any]:
+    """배포 확인용(키 값은 노출하지 않음)."""
+    url = _supabase_url()
+    key = _supabase_key()
+    return {
+        "supabase_url_set": bool(url),
+        "supabase_key_set": bool(key),
+        "supabase_ready": bool(url and key),
+        "transport": "postgrest+requests",
+    }
+
+
 def invalidate_customer_cache() -> None:
     global _rows_cache, _rows_cache_at
     _rows_cache = None
     _rows_cache_at = 0.0
 
 
-def _get_client() -> Any:
-    global _client
-    if _client is not None:
-        return _client
-    url = _supabase_url()
+def _rest_headers(*, extra: dict[str, str] | None = None) -> dict[str, str]:
     key = _supabase_key()
-    if not url or not key:
-        raise RuntimeError("SUPABASE_URL 및 SUPABASE_KEY(또는 SERVICE_ROLE)가 필요합니다.")
-    try:
-        from supabase import create_client
-    except ImportError as e:
-        raise RuntimeError("pip install supabase 가 필요합니다.") from e
-    _client = create_client(url, key)
-    return _client
+    h = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+    }
+    if extra:
+        h.update(extra)
+    return h
+
+
+def _rest_base() -> str:
+    url = _supabase_url()
+    if not url:
+        raise RuntimeError("SUPABASE_URL 이 설정되지 않았습니다.")
+    return f"{url}/rest/v1"
 
 
 def fetch_all_customer_rows(*, force_refresh: bool = False) -> list[dict[str, Any]]:
@@ -71,19 +96,24 @@ def fetch_all_customer_rows(*, force_refresh: bool = False) -> list[dict[str, An
     ):
         return list(_rows_cache)
 
-    client = _get_client()
+    if not is_configured():
+        raise RuntimeError("SUPABASE_URL 및 SUPABASE_KEY(또는 SERVICE_ROLE)가 필요합니다.")
+
+    endpoint = f"{_rest_base()}/customers"
+    params = {"select": _SELECT, "order": "business_number.asc"}
     out: list[dict[str, Any]] = []
     offset = 0
+
     while True:
         end = offset + _PAGE_SIZE - 1
-        res = (
-            client.table("customers")
-            .select("business_number,company_name,disclosure_corp_code,stock_code")
-            .order("business_number")
-            .range(offset, end)
-            .execute()
-        )
-        batch = list(res.data or [])
+        headers = _rest_headers(extra={"Range": f"{offset}-{end}"})
+        r = _SESSION.get(endpoint, params=params, headers=headers, timeout=90)
+        if r.status_code >= 400:
+            detail = (r.text or "")[:500]
+            raise RuntimeError(f"Supabase 조회 실패 HTTP {r.status_code}: {detail}")
+        batch = r.json()
+        if not isinstance(batch, list):
+            raise RuntimeError("Supabase 응답 형식 오류(배열 아님)")
         out.extend(batch)
         if len(batch) < _PAGE_SIZE:
             break
@@ -120,7 +150,6 @@ def customers_as_analyze_dicts(rows: list[dict[str, Any]] | None = None) -> list
 def filter_customers_with_disclosure(
     customers: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int]:
-    """공시번호 8자리 있는 행만. 반환: (분석 대상, 제외 건수)."""
     ok: list[dict[str, Any]] = []
     skipped = 0
     for c in customers:
@@ -138,7 +167,7 @@ def customers_to_csv_text(rows: list[dict[str, Any]] | None = None) -> str:
     w = csv.writer(buf, lineterminator="\n")
     w.writerow(["사업자번호", "업체명", "공시번호", "종목코드"])
     for r in raw:
-        biz = normalize_biz_number(str(r.get("business_number") or ""))
+        biz = normalize_biz_number(str(row.get("business_number") or ""))
         if len(biz) != 10:
             continue
         w.writerow(
@@ -153,21 +182,27 @@ def customers_to_csv_text(rows: list[dict[str, Any]] | None = None) -> str:
 
 
 def upsert_customer_rows(rows: list[dict[str, Any]], *, batch_size: int = 200) -> int:
-    """business_number 기준 upsert."""
     if not rows:
         return 0
-    client = _get_client()
+    endpoint = f"{_rest_base()}/customers"
+    headers = _rest_headers(
+        extra={
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates",
+        }
+    )
     n = 0
     for i in range(0, len(rows), batch_size):
         chunk = rows[i : i + batch_size]
-        client.table("customers").upsert(chunk, on_conflict="business_number").execute()
+        r = _SESSION.post(endpoint, headers=headers, data=json.dumps(chunk), timeout=120)
+        if r.status_code >= 400:
+            raise RuntimeError(f"Supabase upsert 실패 HTTP {r.status_code}: {(r.text or '')[:500]}")
         n += len(chunk)
     invalidate_customer_cache()
     return n
 
 
 def merge_into_biz_registry(registry: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
-    """Supabase 행을 dart_service 레지스트리에 병합."""
     if not is_configured():
         return registry
     try:

@@ -262,6 +262,28 @@ def analysis_results_fragment_kwargs(
     }
 
 
+@app.route("/api/health")
+def api_health():
+    """배포·환경 변수 확인(시크릿 값은 노출하지 않음)."""
+    from services.dart_service import get_dart_api_key
+
+    body: dict[str, Any] = {
+        "dart_api_key_set": bool(get_dart_api_key()),
+        "vercel": bool(os.environ.get("VERCEL")),
+    }
+    if supabase_customers is not None:
+        body["supabase"] = supabase_customers.config_status()
+        if body["supabase"].get("supabase_ready"):
+            try:
+                rows = supabase_customers.fetch_all_customer_rows(force_refresh=True)
+                body["supabase"]["customer_row_count"] = len(rows)
+            except Exception as e:
+                body["supabase"]["fetch_error"] = str(e)[:300]
+    else:
+        body["supabase"] = {"supabase_ready": False}
+    return jsonify(body)
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     results = []
