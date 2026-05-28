@@ -212,14 +212,14 @@ def parse_csv_text(text: str) -> list[dict]:
     return rows
 
 
-def csv_sheet_preview(csv_text: str, max_display_rows: int = 50) -> dict[str, Any]:
-    """화면 표 미리보기용: 헤더(첫 행) + 본문 상한 높이에서 스크롤."""
+def csv_sheet_preview(csv_text: str) -> dict[str, Any]:
+    """화면 표 미리보기용: 헤더(첫 행) + 데이터 행 전체(스크롤 영역)."""
     t = (csv_text or "").strip()
     meta: dict[str, Any] = {
         "empty": True,
         "headers": [],
         "rows": [],
-        "overflow": False,
+        "row_count": 0,
     }
     if not t:
         return meta
@@ -230,8 +230,6 @@ def csv_sheet_preview(csv_text: str, max_display_rows: int = 50) -> dict[str, An
         return meta
     headers = [(str(c) if c is not None else "").strip() for c in rows[0]]
     body = rows[1:]
-    overflow = len(body) > max_display_rows
-    body = body[:max_display_rows]
     nh = len(headers)
     padded: list[list[str]] = []
     for raw in body:
@@ -241,7 +239,7 @@ def csv_sheet_preview(csv_text: str, max_display_rows: int = 50) -> dict[str, An
         padded.append(cells)
     meta["headers"] = headers
     meta["rows"] = padded
-    meta["overflow"] = overflow
+    meta["row_count"] = len(padded)
     return meta
 
 
@@ -478,14 +476,35 @@ def api_analyze():
 def enrich_stream():
     """NDJSON — 공시번호 없는 customers 를 DART로 보강(10시 Cron 과 동일 로직)."""
 
+    def _ndjson_line(payload: dict[str, Any]) -> bytes:
+        return (json_std.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+
     def chunks() -> Iterator[bytes]:
         try:
+            yield _ndjson_line(
+                {
+                    "type": "progress",
+                    "phase": "connecting",
+                    "current": 0,
+                    "total": 0,
+                    "fraction": 0,
+                    "pct": 0,
+                    "elapsed_sec": 0,
+                    "eta_sec": None,
+                    "message": "시도 중… 서버에 연결합니다.",
+                }
+            )
+
             if not _supabase_ready():
                 err = {"type": "error", "message": "Supabase 가 설정되지 않았습니다."}
-                yield (json_std.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
+                yield _ndjson_line(err)
                 return
 
             from services.customer_enrichment import enrich_manual_max_items, iter_disclosure_refresh_events
+
+            yield _ndjson_line(
+                {"type": "info", "message": "시도 중… 공시번호 없는 고객 목록을 불러옵니다."}
+            )
 
             pending = supabase_customers.fetch_rows_missing_disclosure(force_refresh=True)
             manual_cap = enrich_manual_max_items()
@@ -500,16 +519,20 @@ def enrich_stream():
                         "csv_text": csv_text,
                         "fragment": csv_preview_fragment(csv_text),
                     }
-                yield (json_std.dumps(ev, ensure_ascii=False) + "\n").encode("utf-8")
+                yield _ndjson_line(ev)
 
         except Exception as e:
             err = {"type": "error", "message": str(e)}
-            yield (json_std.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
+            yield _ndjson_line(err)
 
     return Response(
         stream_with_context(chunks()),
         mimetype="application/x-ndjson; charset=utf-8",
-        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        headers={
+            "Cache-Control": "no-store, no-transform",
+            "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

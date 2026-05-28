@@ -1,9 +1,7 @@
         <div class="csv-preview-stack">
           <div class="csv-preview-head">
             <span class="csv-preview-title">표 미리보기</span>
-            {% if csv_preview.overflow %}
-            <span class="csv-preview-note">처음 {{ csv_preview.rows|length }}개 데이터 행만 표시</span>
-            {% endif %}
+            <span class="csv-preview-note">전체 : {{ csv_preview.row_count }}건</span>
           </div>
           <div class="table-wrap">
           <div class="csv-preview-scroll">

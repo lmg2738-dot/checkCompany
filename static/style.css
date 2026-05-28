@@ -42,15 +42,21 @@ body {
 .hero-head-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 0.75rem 1rem;
-  margin-bottom: 0.4rem;
+  gap: 0.85rem 1.25rem;
+  margin-bottom: 0.5rem;
 }
 
 .hero-head-row h1 {
   margin: 0;
-  flex: 1 1 12rem;
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.hero-head-actions {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .hero h1 {
@@ -254,32 +260,72 @@ table.sheet-data-table {
   filter: none;
 }
 
-.btn-secondary {
-  flex-shrink: 0;
-  align-self: center;
-  padding: 0.55rem 1.05rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+.btn-enrich {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 12.5rem;
+  padding: 0.9rem 1.75rem;
+  border: 2px solid #1a2332;
+  border-radius: 10px;
   background: var(--sheet);
   color: var(--text);
-  font-weight: 600;
-  font-size: 0.88rem;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
   cursor: pointer;
-  box-shadow: 0 1px 4px rgba(31, 45, 61, 0.08);
+  box-shadow: 0 2px 10px rgba(26, 35, 50, 0.1);
+  white-space: nowrap;
 }
 
-.btn-secondary:hover {
-  background: var(--accent-soft);
-  border-color: #b8c9e0;
+.btn-enrich:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #0f1728;
 }
 
-.btn-secondary:disabled {
-  opacity: 0.65;
-  cursor: not-allowed;
+.btn-enrich:disabled {
+  opacity: 0.88;
+  cursor: wait;
+  background: #f0f4fa;
+}
+
+.btn-enrich.is-busy {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.enrich-progress-panel {
+  margin-top: 0.65rem;
+  margin-bottom: 0.85rem;
+}
+
+.enrich-progress-panel.is-visible {
+  display: block !important;
+}
+
+.enrich-progress-panel[hidden] {
+  display: none !important;
+}
+
+.enrich-progress-bar.is-indeterminate {
+  width: 38% !important;
+  min-width: 4rem;
+  animation: enrich-bar-slide 1.15s ease-in-out infinite;
+}
+
+@keyframes enrich-bar-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
 }
 
 .enrich-stop-alert {
-  margin-top: 0.75rem;
+  margin-top: 0;
+  margin-bottom: 0.85rem;
 }
 
 .analyze-progress-panel {
