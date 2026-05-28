@@ -21,6 +21,7 @@ except ImportError:
 
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
+from churn_model import composite_weights_formula
 from customer_analyzer import analyze_customer
 from services.analysis_context import analyze_runtime, set_thread_bulk_analyze
 from services.dart_service import (
@@ -181,11 +182,17 @@ def sorted_results_for_template(rows: list[dict[str, Any]] | None) -> list[dict[
 
 def analysis_results_fragment_kwargs(results_payload: list[dict[str, Any]]) -> dict[str, Any]:
     results_with_gaps = [r for r in results_payload if not r.get("ticker_available")]
+    market_excluded = [
+        r for r in results_payload if not r.get("market_in_composite", r.get("ticker_available"))
+    ]
     return {
         **dart_template_path_vars(),
         "sorted_results": sorted_results_for_template(results_payload),
         "results": results_payload,
         "results_ticker_missing_count": len(results_with_gaps),
+        "results_market_excluded_count": len(market_excluded),
+        "composite_weights_with_m": composite_weights_formula(include_market=True),
+        "composite_weights_no_m": composite_weights_formula(include_market=False),
     }
 
 
@@ -229,7 +236,11 @@ def index():
         csv_preview=csv_preview,
         **ctx,
         formula_summary={
-            "weights": "S = 0.20·E + 0.30·N + 0.25·M + 0.25·C",
+            "weights": composite_weights_formula(include_market=True),
+            "weights_note": (
+                "종목 코드가 없는 행은 M을 복합점수에 넣지 않고 "
+                f"{composite_weights_formula(include_market=False)} 로 N·C 비중을 키웁니다."
+            ),
             "churn_prob": "P = σ(-2 + 4·S),  σ(x)=1/(1+e^{-x})",
         },
     )

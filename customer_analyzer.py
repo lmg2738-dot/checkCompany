@@ -70,6 +70,7 @@ def analyze_customer(
         market_risk=row["market_risk"],
         credit_risk=row["credit_risk"],
         engagement_is_unknown=True,
+        market_in_composite=ticker_available,
     )
 
     return {
@@ -86,4 +87,5 @@ def analyze_customer(
         "dart": dart,
         "composite_score": est.composite_score,
         "estimated_churn_probability": est.estimated_churn_probability,
+        "market_in_composite": est.market_in_composite,
     }

@@ -1,6 +1,6 @@
     <section class="panel sheet">
       <h2>위험 상위 10개 업체</h2>
-      <p class="chart-intro">복합 위험 점수(0~100)와 추정 이탈 확률을 같은 스케일 막대로 비교했습니다.</p>
+      <p class="chart-intro">복합 위험 점수(0~100)와 추정 이탈 확률을 같은 스케일 막대로 비교했습니다. 종목이 없는 업체는 M을 복합에 넣지 않고 N·C 비중을 키웁니다.</p>
       <div class="top10-chart">
         {% for r in sorted_results %}
           {% if loop.index <= 10 %}
@@ -41,11 +41,11 @@
     <section class="panel sheet">
       <h2>전체 결과 (위험 점수 높은 순)</h2>
       <div class="result-column-legend" aria-label="표 컬럼 설명">
-        <p><strong>복합점수</strong> : 참여 불확실성·뉴스(N)·시장(M)·신용(C)을 가중 합산해 0~100으로 환산한 <strong>종합 위험</strong>입니다.</p>
+        <p><strong>복합점수</strong> : 참여(E)·뉴스(N)·시장(M)·신용(C) 가중 합(기본 <code>{{ composite_weights_with_m }}</code>). <strong>종목 코드가 없으면</strong> <code>{{ composite_weights_no_m }}</code> 로 M을 빼고 N·C 비중만 키웁니다.</p>
         <p><strong>추정이탈</strong> : 위 복합점수에서 로지스틱 변환으로 둔 <strong>이탈 가능성 추정값</strong>입니다(표에서는 %).</p>
-        <p><strong>N</strong> : <span class="abbr-hint">News</span> 뉴스 RSS 제목·요약 속 부정·재무 성격 키워드를 반영한 값(표는 0~1 소수).</p>
-        <p><strong>M</strong> : <span class="abbr-hint">Market</span> 최근 구간 주가 수익률·변동성 등 시장 스트레스입니다. 종목 부재 시 보조값이 들어올 수 있음(0~1 소수).</p>
-        <p><strong>C</strong> : <span class="abbr-hint">Credit</span> 재무 성격의 뉴스와 Open DART 공시·재무지표 등을 반영한 신용·재무 축입니다(0~1 소수).</p>
+        <p><strong>N</strong> : <span class="abbr-hint">News</span> 뉴스 RSS 제목·요약 속 부정·재무 성격 키워드(0~1 소수).</p>
+        <p><strong>M</strong> : <span class="abbr-hint">Market</span> 주가 수익률·변동성(종목·시세 있을 때). <strong>종목 없음</strong>이면 표에만 참고(보조값)이고 <strong>복합점수에는 미반영</strong>.</p>
+        <p><strong>C</strong> : <span class="abbr-hint">Credit</span> 재무 뉴스·Open DART 공시·재무지표(0~1 소수). 종목 없을 때 복합에서 N과 함께 비중이 커집니다.</p>
       </div>
       <div class="table-wrap">
         <table class="sheet-data-table result-table">
@@ -76,7 +76,8 @@
               <td class="td-num">{{ '%.2f'|format(r.estimate.news_risk) }}</td>
               <td class="td-num">
                 {{ '%.2f'|format(r.estimate.market_risk) }}
-                {% if not r.market_observed %}<span class="m-note">보조값</span>{% endif %}
+                {% if not r.market_in_composite %}<span class="m-note">복합제외</span>
+                {% elif not r.market_observed %}<span class="m-note">보조값</span>{% endif %}
               </td>
               <td class="td-num">{{ '%.2f'|format(r.estimate.credit_risk) }}</td>
               <td class="td-notes">
@@ -107,9 +108,14 @@
           </tbody>
         </table>
       </div>
-      {% if results_ticker_missing_count %}
+      {% if results_market_excluded_count %}
       <p class="summary-gap summary-gap-below-table">
-        이번 분석에서 종목 미반영 시장 보조값(M) 적용: <strong>{{ results_ticker_missing_count }}</strong> / {{ results|length }}건
+        종목 없음 → M 복합 제외(N·C 가중): <strong>{{ results_market_excluded_count }}</strong> / {{ results|length }}건
+        (가중: <code>{{ composite_weights_no_m }}</code>)
+      </p>
+      {% elif results_ticker_missing_count %}
+      <p class="summary-gap summary-gap-below-table">
+        종목 미기재: <strong>{{ results_ticker_missing_count }}</strong> / {{ results|length }}건
       </p>
       {% endif %}
     </section>
@@ -118,7 +124,8 @@
       <h3>해석 안내</h3>
       <ul>
         <li>복합 점수는 0~100 스케일입니다.</li>
-        <li>종목 코드가 없거나 비상장인 경우 주가가 반영되지 않아 시장(M)에 보조값이 들어 갈 수 있습니다. 점검: <code>python build_dart_registry.py --list-incomplete</code></li>
+        <li>종목 코드가 없으면 M은 표 참고용이며 <strong>복합점수·추정이탈에는 포함되지 않습니다</strong>. 이때 N·C만으로 <code>{{ composite_weights_no_m }}</code> 를 씁니다.</li>
+        <li>종목·공시번호 보강: <code>python build_dart_registry.py --list-incomplete</code></li>
         <li>DART 연동에는 <strong>공시번호</strong>(8자리)가 유리합니다. <code>{{ dart_bizno_rel }}</code> → <code>{{ dart_master_rel }}</code></li>
         <li>유사 상호 뉴스는 오탐이 있을 수 있으니 검증이 필요합니다.</li>
       </ul>

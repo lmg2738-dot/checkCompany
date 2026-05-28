@@ -52,6 +52,13 @@ body {
   font-size: 0.95rem;
 }
 
+.formula-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  max-width: 52rem;
+}
+
 /* 내부 참조용 수식 블록 — 화면 비표시 (.formula-internal) */
 .formula.formula-internal {
   display: none !important;
