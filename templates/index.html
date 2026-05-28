@@ -11,8 +11,9 @@
     <header class="hero panel sheet">
     <div class="hero-head-row">
       <h1>고객 이탈·이슈 위험 리포트</h1>
-      {% if supabase_configured %}
+      {% if supabase_configured or resend_ready %}
       <div class="hero-head-actions">
+        {% if supabase_configured %}
         <button type="button" class="btn-enrich" id="enrich-btn"
           data-stream-url="{{ url_for('enrich_stream') }}"
           data-label-default="업체정보갱신"
@@ -21,6 +22,15 @@
           {% endif %}>
           업체정보갱신
         </button>
+        {% endif %}
+        {% if resend_ready %}
+        <button type="button" class="btn-email" id="email-btn"
+          data-stream-url="{{ url_for('send_risk_email_stream') }}"
+          data-label-default="메일발송"
+          title="10시 배치와 동일: 전체 분석 후 위험 상위 10개 리포트 메일">
+          메일발송
+        </button>
+        {% endif %}
       </div>
       {% endif %}
     </div>
@@ -33,6 +43,16 @@
       <div class="analyze-progress-meta muted" id="enrich-progress-meta"></div>
     </div>
     <div id="enrich-stop-alert" class="alert enrich-stop-alert" hidden role="alert"></div>
+    {% endif %}
+    {% if resend_ready %}
+    <div class="analyze-progress-panel email-progress-panel" id="email-progress-panel" hidden aria-hidden="true">
+      <div class="analyze-progress-label" id="email-progress-label" aria-live="polite">메일 발송 준비 중…</div>
+      <div class="analyze-progress-bar-wrap">
+        <div class="analyze-progress-bar email-progress-bar" id="email-progress-bar"></div>
+      </div>
+      <div class="analyze-progress-meta muted" id="email-progress-meta"></div>
+    </div>
+    <div id="email-stop-alert" class="alert email-stop-alert" hidden role="alert"></div>
     {% endif %}
     <p class="sub">
       업체명·사업자번호 리스트를 넣으면 <strong>뉴스(RSS)</strong>, <strong>주가(yfinance)</strong>,
@@ -274,6 +294,7 @@
   var previewHost = document.getElementById("csv-preview-host");
   var ta = document.getElementById("csv_text");
   var analyzeBtn = document.getElementById("analyze-submit-btn");
+  var emailBtn = document.getElementById("email-btn");
   var waitTimer = null;
   var waitSec = 0;
   var gotServerEvent = false;
@@ -317,6 +338,7 @@
       btn.textContent = defaultLabel;
     }
     if (analyzeBtn) analyzeBtn.disabled = !!on;
+    if (emailBtn) emailBtn.disabled = !!on;
   }
 
   function clearWaitTimer() {
@@ -495,6 +517,266 @@
         setIndeterminate(false);
         showStop(err.message || String(err));
         if (lbl) lbl.textContent = "갱신 실패";
+      })
+      .finally(function () {
+        clearWaitTimer();
+        setBusyState(false);
+      });
+  });
+})();
+
+(function () {
+  function supportsStreamFetch() {
+    return typeof Response !== "undefined"
+      && typeof ReadableStream !== "undefined"
+      && typeof fetch === "function";
+  }
+
+  function fmtEtaSeconds(sec) {
+    var x = Math.max(0, Math.ceil(Number(sec) || 0));
+    if (x < 60) return "약 " + x + "초";
+    var m = Math.floor(x / 60);
+    var s = x % 60;
+    return "약 " + m + "분 " + s + "초";
+  }
+
+  var btn = document.getElementById("email-btn");
+  if (!btn) return;
+
+  var url = btn.getAttribute("data-stream-url");
+  var defaultLabel = btn.getAttribute("data-label-default") || "메일발송";
+  var bar = document.getElementById("email-progress-bar");
+  var lbl = document.getElementById("email-progress-label");
+  var meta = document.getElementById("email-progress-meta");
+  var panel = document.getElementById("email-progress-panel");
+  var stopAlert = document.getElementById("email-stop-alert");
+  var enrichBtn = document.getElementById("enrich-btn");
+  var analyzeBtn = document.getElementById("analyze-submit-btn");
+  var waitTimer = null;
+  var waitSec = 0;
+  var gotServerEvent = false;
+
+  function peerButtons(disabled) {
+    if (enrichBtn) enrichBtn.disabled = disabled;
+    if (analyzeBtn) analyzeBtn.disabled = disabled;
+    btn.disabled = disabled;
+  }
+
+  function showPanel() {
+    if (!panel) return;
+    panel.removeAttribute("hidden");
+    panel.classList.add("is-visible");
+    panel.setAttribute("aria-hidden", "false");
+    try {
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } catch (_) {
+      panel.scrollIntoView(true);
+    }
+  }
+
+  function hidePanel() {
+    if (!panel) return;
+    panel.setAttribute("hidden", "");
+    panel.classList.remove("is-visible");
+    panel.setAttribute("aria-hidden", "true");
+  }
+
+  function setIndeterminate(on) {
+    if (!bar) return;
+    if (on) {
+      bar.classList.add("is-indeterminate");
+      bar.style.width = "38%";
+    } else {
+      bar.classList.remove("is-indeterminate");
+    }
+  }
+
+  function setBusyState(on) {
+    peerButtons(!!on);
+    if (on) {
+      btn.classList.add("is-busy");
+      btn.textContent = "시도 중…";
+    } else {
+      btn.classList.remove("is-busy");
+      btn.textContent = defaultLabel;
+    }
+  }
+
+  function clearWaitTimer() {
+    if (waitTimer) {
+      clearInterval(waitTimer);
+      waitTimer = null;
+    }
+  }
+
+  function showStop(msg) {
+    if (!stopAlert) return;
+    stopAlert.textContent = msg || "메일 발송이 중단되었습니다.";
+    stopAlert.hidden = false;
+  }
+
+  function hideStop() {
+    if (!stopAlert) return;
+    stopAlert.textContent = "";
+    stopAlert.hidden = true;
+  }
+
+  function startAttemptingUi() {
+    gotServerEvent = false;
+    waitSec = 0;
+    hideStop();
+    showPanel();
+    setIndeterminate(true);
+    if (lbl) lbl.textContent = "시도 중…";
+    if (meta) meta.textContent = "전체 분석 후 메일을 발송합니다. 잠시만 기다려 주세요.";
+    setBusyState(true);
+    clearWaitTimer();
+    waitTimer = setInterval(function () {
+      if (gotServerEvent) return;
+      waitSec += 1;
+      if (meta) {
+        meta.textContent = "시도 중… 연결 대기 " + waitSec + "초";
+      }
+    }, 1000);
+  }
+
+  function handleStreamEvent(data) {
+    gotServerEvent = true;
+    clearWaitTimer();
+
+    if (data.type === "info") {
+      setIndeterminate(true);
+      if (lbl) lbl.textContent = data.message || "시도 중…";
+      return;
+    }
+
+    if (data.type === "progress") {
+      if (data.phase === "connecting" || (data.phase !== "analyzing" && !data.total)) {
+        setIndeterminate(true);
+        if (lbl) lbl.textContent = data.message || "시도 중…";
+        if (meta && data.phase === "connecting") {
+          meta.textContent = "서버에 연결했습니다.";
+        }
+        return;
+      }
+      if (data.phase === "sending") {
+        setIndeterminate(true);
+        if (lbl) lbl.textContent = data.message || "메일 발송 중…";
+        if (meta) meta.textContent = "Resend API 호출 중";
+        return;
+      }
+      setIndeterminate(false);
+      var fracPct = typeof data.fraction === "number"
+        ? data.fraction * 100
+        : (data.pct != null ? Number(data.pct) : 0);
+      if (bar) bar.style.width = Math.min(100, Math.max(0, fracPct)).toFixed(1) + "%";
+      var cur = data.current != null ? data.current : "?";
+      var tot = data.total != null ? data.total : "?";
+      if (lbl) lbl.textContent = data.message || ("분석 중: " + cur + " / " + tot + "건");
+      if (meta) {
+        var parts = [];
+        parts.push("경과 " + (data.elapsed_sec != null ? data.elapsed_sec : "0") + "초");
+        var n = Number(data.total) || 0;
+        var cc = Number(data.current) || 0;
+        if (n > 0 && cc < n && data.eta_sec != null && data.eta_sec >= 0) {
+          parts.push("예상 남은 시간 " + fmtEtaSeconds(data.eta_sec));
+        } else if (n > 0 && cc >= n) {
+          parts.push("분석 완료 · 메일 준비");
+        }
+        meta.textContent = parts.join(" · ");
+      }
+      return;
+    }
+
+    if (data.type === "error") {
+      setIndeterminate(false);
+      showStop(data.message || "메일 발송 오류");
+      if (lbl) lbl.textContent = "발송 중단";
+      return "stop";
+    }
+
+    if (data.type === "done") {
+      setIndeterminate(false);
+      if (bar) bar.style.width = "100%";
+      var summary = data.message || "메일 발송 완료";
+      if (data.subject) summary += " · " + data.subject;
+      if (data.to && data.to.length) {
+        summary += " → " + data.to.join(", ");
+      }
+      if (lbl) lbl.textContent = summary;
+      if (meta) {
+        meta.textContent = "분석 " + (data.analyzed_count != null ? data.analyzed_count : "?")
+          + "건 · 상위 " + (data.emailed_top != null ? data.emailed_top : "10") + "개 포함";
+      }
+      window.setTimeout(function () {
+        hidePanel();
+      }, 3500);
+      return "stop";
+    }
+  }
+
+  btn.addEventListener("click", function () {
+    if (!supportsStreamFetch()) {
+      showStop("이 브라우저는 스트리밍을 지원하지 않습니다.");
+      return;
+    }
+    if (!url) {
+      showStop("메일 API 주소를 찾을 수 없습니다.");
+      return;
+    }
+
+    startAttemptingUi();
+
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/x-ndjson" },
+      body: "{}",
+      credentials: "same-origin",
+    })
+      .then(function (resp) {
+        if (!resp.ok || !resp.body) {
+          throw new Error("서버 요청 오류 (" + resp.status + ")");
+        }
+        var reader = resp.body.getReader();
+        var dec = new TextDecoder();
+        var buf = "";
+        var stopped = false;
+
+        function pump() {
+          return reader.read().then(function (chunk) {
+            if (stopped) return;
+            var done = chunk.done;
+            var value = chunk.value;
+            buf += dec.decode(value || new Uint8Array(), { stream: !done });
+            var lines = buf.split("\n");
+            buf = lines.pop() || "";
+
+            for (var i = 0; i < lines.length; i++) {
+              var trimmed = lines[i].trim();
+              if (!trimmed) continue;
+              var data;
+              try {
+                data = JSON.parse(trimmed);
+              } catch (e2) {
+                showStop(e2.message || String(e2));
+                stopped = true;
+                return;
+              }
+              var outcome = handleStreamEvent(data);
+              if (outcome === "stop") {
+                stopped = true;
+                return;
+              }
+            }
+            return done || stopped ? undefined : pump();
+          });
+        }
+        return pump();
+      })
+      .catch(function (err) {
+        setIndeterminate(false);
+        showStop(err.message || String(err));
+        if (lbl) lbl.textContent = "발송 실패";
       })
       .finally(function () {
         clearWaitTimer();

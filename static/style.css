@@ -57,6 +57,11 @@ body {
 .hero-head-actions {
   flex-shrink: 0;
   margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
 }
 
 .hero h1 {
@@ -295,7 +300,42 @@ table.sheet-data-table {
   color: var(--accent);
 }
 
-.enrich-progress-panel {
+.btn-email {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 10.5rem;
+  padding: 0.9rem 1.55rem;
+  border: 2px solid #1a5fb4;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(26, 95, 180, 0.28);
+  white-space: nowrap;
+}
+
+.btn-email:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.btn-email:disabled {
+  opacity: 0.88;
+  cursor: wait;
+}
+
+.btn-email.is-busy {
+  background: #f0f4fa;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.enrich-progress-panel,
+.email-progress-panel {
   margin-top: 0.65rem;
   margin-bottom: 0.85rem;
 }
@@ -323,9 +363,24 @@ table.sheet-data-table {
   }
 }
 
-.enrich-stop-alert {
+.enrich-stop-alert,
+.email-stop-alert {
   margin-top: 0;
   margin-bottom: 0.85rem;
+}
+
+.email-progress-panel.is-visible {
+  display: block !important;
+}
+
+.email-progress-panel[hidden] {
+  display: none !important;
+}
+
+.email-progress-bar.is-indeterminate {
+  width: 38% !important;
+  min-width: 4rem;
+  animation: enrich-bar-slide 1.15s ease-in-out infinite;
 }
 
 .analyze-progress-panel {
