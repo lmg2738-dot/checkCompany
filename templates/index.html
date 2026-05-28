@@ -23,7 +23,15 @@
     </header>
 
     <section class="panel sheet">
-      <h2>고객 리스트 (CSV 입력)</h2>
+      <h2>고객 리스트{% if supabase_configured %} (Supabase){% else %} (CSV){% endif %}</h2>
+      <p class="customer-source-note muted">
+        데이터 출처: <strong>{{ customer_data_source }}</strong>.
+        {% if supabase_configured %}
+        분석 실행 시 <strong>공시번호(8자리)가 없는 고객은 자동 제외</strong>됩니다.
+        {% else %}
+        분석 실행 시 공시번호가 없는 행은 제외됩니다.
+        {% endif %}
+      </p>
       {% if error %}
       <div class="alert">{{ error }}</div>
       {% endif %}
@@ -171,6 +179,11 @@
               if (!trimmed) continue;
               try {
                 var data = JSON.parse(trimmed);
+                if (data.type === "info") {
+                  if (lbl) lbl.textContent = data.message || "분석 준비";
+                  if (meta) meta.textContent = "";
+                  continue;
+                }
                 if (data.type === "progress") {
                   var fracPct = typeof data.fraction === "number"
                     ? data.fraction * 100

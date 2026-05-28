@@ -12,12 +12,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Iterator
 
-try:
-    from dotenv import load_dotenv
+from services.env_config import bootstrap_env
 
-    load_dotenv(Path(__file__).resolve().parent / ".env")
-except ImportError:
-    pass
+bootstrap_env()
 
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
@@ -33,6 +30,11 @@ from services.dart_service import (
     normalize_disclosure_corp_code,
 )
 from services.news_rss import normalize_biz_number
+
+try:
+    from services import supabase_customers
+except ImportError:
+    supabase_customers = None  # type: ignore
 
 BASE = Path(__file__).resolve().parent
 
@@ -54,8 +56,66 @@ def load_default_sample_csv() -> str:
     return ""
 
 
+def _supabase_ready() -> bool:
+    return supabase_customers is not None and supabase_customers.is_configured()
+
+
+def customer_source_context() -> dict[str, Any]:
+    if _supabase_ready():
+        return {
+            "supabase_configured": True,
+            "customer_data_source": "Supabase · customers 테이블",
+        }
+    return {
+        "supabase_configured": False,
+        "customer_data_source": f"로컬 · {DART_BIZ_MASTER_CSV.name}",
+    }
+
+
+def _filter_disclosure_fallback(
+    customers: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    ok: list[dict[str, Any]] = []
+    skipped = 0
+    for c in customers:
+        cc = normalize_disclosure_corp_code(c.get("dart_corp_code") or "") or ""
+        if len(cc) == 8:
+            ok.append({**c, "dart_corp_code": cc})
+        else:
+            skipped += 1
+    return ok, skipped
+
+
+def prepare_customers_for_analysis(csv_text: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Supabase 우선 · 공시번호 8자리 없는 행은 분석 제외."""
+    meta: dict[str, Any] = {
+        "source": "csv",
+        "total_raw": 0,
+        "skipped_no_disclosure": 0,
+        "count": 0,
+    }
+    if _supabase_ready():
+        meta["source"] = "supabase"
+        mapped = supabase_customers.customers_as_analyze_dicts()
+    else:
+        mapped = parse_csv_text((csv_text or "").strip())
+    meta["total_raw"] = len(mapped)
+    if supabase_customers is not None:
+        good, skipped = supabase_customers.filter_customers_with_disclosure(mapped)
+    else:
+        good, skipped = _filter_disclosure_fallback(mapped)
+    meta["skipped_no_disclosure"] = skipped
+    meta["count"] = len(good)
+    return good, meta
+
+
 def initial_csv_text_for_get() -> str:
-    """첫 화면: 마스터 CSV → 입력순+레지스트리 조합 → 사업자만 → 예시 CSV."""
+    """첫 화면: Supabase → 마스터 CSV → 입력순+레지스트리 → 예시 CSV."""
+    if _supabase_ready():
+        try:
+            return supabase_customers.customers_to_csv_text()
+        except Exception:
+            pass
     if DART_BIZ_MASTER_CSV.is_file():
         return DART_BIZ_MASTER_CSV.read_text(encoding="utf-8-sig")
     nums = load_bizno_input_numbers()
@@ -180,17 +240,23 @@ def sorted_results_for_template(rows: list[dict[str, Any]] | None) -> list[dict[
     return sorted(rows or [], key=lambda r: float(r.get("composite_score") or 0), reverse=True)
 
 
-def analysis_results_fragment_kwargs(results_payload: list[dict[str, Any]]) -> dict[str, Any]:
+def analysis_results_fragment_kwargs(
+    results_payload: list[dict[str, Any]],
+    prep_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     results_with_gaps = [r for r in results_payload if not r.get("ticker_available")]
     market_excluded = [
         r for r in results_payload if not r.get("market_in_composite", r.get("ticker_available"))
     ]
+    prep = prep_meta or {}
     return {
         **dart_template_path_vars(),
+        **customer_source_context(),
         "sorted_results": sorted_results_for_template(results_payload),
         "results": results_payload,
         "results_ticker_missing_count": len(results_with_gaps),
         "results_market_excluded_count": len(market_excluded),
+        "analysis_prep": prep,
         "composite_weights_with_m": composite_weights_formula(include_market=True),
         "composite_weights_no_m": composite_weights_formula(include_market=False),
     }
@@ -207,9 +273,15 @@ def index():
 
         if not err:
             try:
-                customers = parse_csv_text(raw_csv)
+                customers, prep = prepare_customers_for_analysis(raw_csv)
                 if not customers:
-                    err = "유효한 행이 없습니다. 사업자번호(10자리) 또는 업체명+사업자번호 컬럼을 확인하세요."
+                    if prep.get("skipped_no_disclosure"):
+                        err = (
+                            f"공시번호(8자리)가 있는 고객이 없습니다. "
+                            f"전체 {prep.get('total_raw', 0)}건 중 {prep['skipped_no_disclosure']}건 제외됨."
+                        )
+                    else:
+                        err = "유효한 행이 없습니다. 사업자번호(10자리) 또는 업체명+사업자번호 컬럼을 확인하세요."
                 if not err:
                     gap = float(os.environ.get("DART_ANALYZE_SLEEP_SEC") or "0")
                     load_biz_registry()
@@ -235,6 +307,7 @@ def index():
         csv_text=raw_csv,
         csv_preview=csv_preview,
         **ctx,
+        **customer_source_context(),
         formula_summary={
             "weights": composite_weights_formula(include_market=True),
             "weights_note": (
@@ -250,9 +323,36 @@ def index():
 def api_analyze():
     payload = request.get_json(force=True, silent=True) or {}
     if payload.get("source") == "dart_bizno_input_list" or payload.get("use_dart_bizno_list"):
-        rows = dart_bizno_input_customer_rows()
+        mapped = dart_bizno_input_customer_rows()
+        if supabase_customers is not None:
+            rows, _prep = supabase_customers.filter_customers_with_disclosure(mapped)
+        else:
+            rows, _prep = _filter_disclosure_fallback(mapped)
+    elif _supabase_ready() and not payload.get("customers"):
+        rows, _prep = prepare_customers_for_analysis("")
     else:
-        rows = payload.get("customers") or []
+        raw_rows = payload.get("customers") or []
+        mapped = [
+            {
+                "company_name": str(r.get("company_name", "")),
+                "business_number": str(r.get("business_number", "")),
+                "ticker_override": r.get("ticker_override") or r.get("ticker"),
+                "dart_corp_code": normalize_disclosure_corp_code(
+                    str(
+                        r.get("dart_corp_code")
+                        or r.get("공시번호")
+                        or r.get("corp_code")
+                        or ""
+                    )
+                )
+                or None,
+            }
+            for r in raw_rows
+        ]
+        if supabase_customers is not None:
+            rows, _prep = supabase_customers.filter_customers_with_disclosure(mapped)
+        else:
+            rows, _prep = _filter_disclosure_fallback(mapped)
     out = []
     gap = float(os.environ.get("DART_ANALYZE_SLEEP_SEC") or "0")
     load_biz_registry()
@@ -300,12 +400,26 @@ def analyze_stream():
 
     def chunks() -> Iterator[bytes]:
         try:
-            customers = parse_csv_text(csv_text.strip())
-            if not customers:
-                payload = {
-                    "type": "error",
-                    "message": "유효한 행이 없습니다. 사업자번호(10자리) 또는 업체명+사업자번호 컬럼을 확인하세요.",
+            customers, prep = prepare_customers_for_analysis(csv_text)
+            if prep.get("skipped_no_disclosure"):
+                info = {
+                    "type": "info",
+                    "message": (
+                        f"공시번호 없음 {prep['skipped_no_disclosure']}건 제외 · "
+                        f"분석 {prep.get('count', 0)}건"
+                        + (
+                            f" (출처: Supabase)"
+                            if prep.get("source") == "supabase"
+                            else ""
+                        )
+                    ),
                 }
+                yield (json_std.dumps(info, ensure_ascii=False) + "\n").encode("utf-8")
+            if not customers:
+                msg = "공시번호(8자리)가 있는 고객이 없어 분석할 수 없습니다."
+                if prep.get("total_raw"):
+                    msg += f" (전체 {prep['total_raw']}건, 제외 {prep.get('skipped_no_disclosure', 0)}건)"
+                payload = {"type": "error", "message": msg}
                 yield (json_std.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
                 return
 
@@ -375,7 +489,7 @@ def analyze_stream():
 
             results_payload = [r for r in results_payload if r is not None]
 
-            frag_ctx = analysis_results_fragment_kwargs(results_payload)
+            frag_ctx = analysis_results_fragment_kwargs(results_payload, prep_meta=prep)
             fragment = render_template("partials/analysis_results.html", **frag_ctx)
             done_payload = {"type": "done", "fragment": fragment}
             yield (json_std.dumps(done_payload, ensure_ascii=False) + "\n").encode("utf-8")

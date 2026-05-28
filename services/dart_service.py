@@ -187,6 +187,13 @@ def load_biz_registry() -> dict[str, dict[str, str]]:
                     _merge_entry(key, entry)
         except OSError:
             pass
+    try:
+        from services import supabase_customers
+
+        if supabase_customers.is_configured():
+            out = supabase_customers.merge_into_biz_registry(out)
+    except Exception:
+        pass
     _biz_registry = out
     _registry_mtime = mt
     return out
@@ -552,6 +559,12 @@ def invalidate_biz_registry_cache() -> None:
     global _biz_registry, _registry_mtime
     _biz_registry = None
     _registry_mtime = None
+    try:
+        from services import supabase_customers
+
+        supabase_customers.invalidate_customer_cache()
+    except Exception:
+        pass
 
 
 def upsert_dart_biz_master_csv(

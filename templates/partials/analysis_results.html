@@ -40,6 +40,15 @@
 
     <section class="panel sheet">
       <h2>전체 결과 (위험 점수 높은 순)</h2>
+      {% if analysis_prep and analysis_prep.skipped_no_disclosure %}
+      <p class="analysis-prep-note muted">
+        분석 출처: {{ customer_data_source }} ·
+        공시번호 없음 <strong>{{ analysis_prep.skipped_no_disclosure }}</strong>건 제외 ·
+        분석 <strong>{{ analysis_prep.count }}</strong>건
+      </p>
+      {% elif supabase_configured %}
+      <p class="analysis-prep-note muted">분석 출처: {{ customer_data_source }}</p>
+      {% endif %}
       <div class="result-column-legend" aria-label="표 컬럼 설명">
         <p><strong>복합점수</strong> : 참여(E)·뉴스(N)·시장(M)·신용(C) 가중 합(기본 <code>{{ composite_weights_with_m }}</code>). <strong>종목 코드가 없으면</strong> <code>{{ composite_weights_no_m }}</code> 로 M을 빼고 N·C 비중만 키웁니다.</p>
         <p><strong>추정이탈</strong> : 위 복합점수에서 로지스틱 변환으로 둔 <strong>이탈 가능성 추정값</strong>입니다(표에서는 %).</p>

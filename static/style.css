@@ -59,6 +59,13 @@ body {
   max-width: 52rem;
 }
 
+.customer-source-note,
+.analysis-prep-note {
+  margin: 0 0 0.85rem;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
 /* 내부 참조용 수식 블록 — 화면 비표시 (.formula-internal) */
 .formula.formula-internal {
   display: none !important;
