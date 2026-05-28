@@ -17,8 +17,10 @@ import csv
 import io
 import os
 import re
+import tempfile
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -30,9 +32,10 @@ ssl_setup.init_truststore()
 
 import requests
 
+from services.analysis_context import in_analyze_runtime
 from services.news_rss import normalize_biz_number
 
-CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache"
+_CACHE_ROOT = Path(__file__).resolve().parent.parent / ".cache"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 # 레거시(영문 헤더). 우선순위는 DART_BIZ_MASTER_CSV.
 REGISTRY_CSV = DATA_DIR / "dart_company_registry.csv"
@@ -315,10 +318,20 @@ def _input_list_build_hint() -> str:
     )
 
 
+def _writable_cache_dir() -> Path:
+    for d in (_CACHE_ROOT, Path(tempfile.gettempdir()) / "issue-app-cache"):
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+        except OSError:
+            continue
+    return _CACHE_ROOT
+
+
 def download_corp_code_xml(api_key: str) -> bytes:
-    """corpCode.zip. 캐시(.cache/corpCode.zip.raw)가 7일 이내면 재다운로드 생략."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file = CACHE_DIR / "corpCode.zip.raw"
+    """corpCode.zip. 캐시(corpCode.zip.raw)가 7일 이내면 재다운로드 생략."""
+    cache_dir = _writable_cache_dir()
+    cache_file = cache_dir / "corpCode.zip.raw"
     max_age = 86400 * 7
     ignore_cache = os.environ.get("DART_CORPCODE_IGNORE_CACHE", "").strip().lower() in (
         "1",
@@ -548,6 +561,8 @@ def upsert_dart_biz_master_csv(
     stock_code: str,
 ) -> None:
     """스캔·API로 확인된 사업자번호 한 건을 data/dart_biz_master_list.csv 에 반영(병합)."""
+    if in_analyze_runtime():
+        return
     biz = normalize_biz_number(biz)
     cc = normalize_disclosure_corp_code(corp_code)
     if len(biz) != 10 or len(cc) != 8:
@@ -614,8 +629,23 @@ def resolve_corp_code(
     name_s = (company_name or "").strip()
 
     cc_hint = normalize_disclosure_corp_code(corp_code_override)
+    if in_analyze_runtime() and len(user_biz) == 10 and len(cc_hint) == 8:
+        reg = load_biz_registry().get(user_biz) or {}
+        stk = _normalize_stock_code((stock_code or reg.get("stock_code") or "").strip())
+        row_fast = {
+            "corp_code": cc_hint,
+            "corp_name": (name_s or reg.get("corp_name") or "").strip(),
+            "stock_code": stk or (reg.get("stock_code") or "").strip(),
+        }
+        prof_fast: dict[str, Any] = {
+            "corp_name": row_fast["corp_name"],
+            "stock_code": row_fast["stock_code"],
+            "corp_code": cc_hint,
+            "bizr_no": user_biz,
+        }
+        return row_fast, prof_fast, None
+
     # CSV 등에 적힌 공시번호가 오래됐거나 오기입이면 개황이 실패·불일치할 수 있음.
-    # 이 경우에도 사업자번호·bizr_no·스캔·종목 등 다른 경로로 복구할 수 있으므로 여기서는 즉시 종료하지 않음.
     if len(user_biz) == 10 and len(cc_hint) == 8:
         prof_h = fetch_company_json(cc_hint, api_key)
         if prof_h:
@@ -667,22 +697,23 @@ def resolve_corp_code(
                     except OSError:
                         pass
                     return row, prof_b, None
-            scanned = resolve_by_corpus_scan_for_biz(api_key, user_biz)
-            if scanned:
-                row_s, prof_s = scanned
-                try:
-                    upsert_dart_biz_master_csv(
-                        user_biz,
-                        row_s["corp_name"],
-                        row_s["corp_code"],
-                        row_s.get("stock_code") or "",
-                    )
-                except OSError:
-                    pass
-                return row_s, prof_s, "기업개황(bizr_no)에 고유번호 없음 → 공시대상 스캔으로 매칭"
+            if not in_analyze_runtime():
+                scanned = resolve_by_corpus_scan_for_biz(api_key, user_biz)
+                if scanned:
+                    row_s, prof_s = scanned
+                    try:
+                        upsert_dart_biz_master_csv(
+                            user_biz,
+                            row_s["corp_name"],
+                            row_s["corp_code"],
+                            row_s.get("stock_code") or "",
+                        )
+                    except OSError:
+                        pass
+                    return row_s, prof_s, "기업개황(bizr_no)에 고유번호 없음 → 공시대상 스캔으로 매칭"
             return _resolve_fail_msg(user_biz, "기업개황(bizr_no) 응답에 고유번호가 없습니다.")
 
-        scanned_b = resolve_by_corpus_scan_for_biz(api_key, user_biz)
+        scanned_b = None if in_analyze_runtime() else resolve_by_corpus_scan_for_biz(api_key, user_biz)
         if scanned_b:
             row_b, prof_b2 = scanned_b
             try:
@@ -786,22 +817,32 @@ def resolve_corp_code(
     return _resolve_fail_msg(user_biz, "기업개황 조회 실패")
 
 
-def fetch_disclosure_stress(corp_code: str, api_key: str) -> dict[str, Any]:
-    """공시검색 list.json — 최근 1년, 페이지당 최대 100건."""
+def fetch_disclosure_stress(
+    corp_code: str,
+    api_key: str,
+    *,
+    quick: bool = False,
+) -> dict[str, Any]:
+    """공시검색 list.json — quick: 최근 6개월·50건."""
     end = datetime.now()
-    start = end - timedelta(days=365)
+    days = 183 if quick else 365
+    start = end - timedelta(days=days)
     params = {
         "crtfc_key": api_key,
         "corp_code": corp_code,
         "bgn_de": start.strftime("%Y%m%d"),
         "end_de": end.strftime("%Y%m%d"),
-        "page_count": 100,
+        "page_count": 50 if quick else 100,
         "page_no": 1,
         "sort": "date",
         "sort_mth": "desc",
     }
     try:
-        r = SESSION.get(f"{BASE}/list.json", params=params, timeout=25)
+        r = SESSION.get(
+            f"{BASE}/list.json",
+            params=params,
+            timeout=8 if quick else 25,
+        )
         r.raise_for_status()
         js = r.json()
     except Exception as e:
@@ -845,14 +886,23 @@ def _parse_idx_val(val: str | None) -> float | None:
         return None
 
 
-def fetch_financial_index_stress(corp_code: str, api_key: str) -> dict[str, Any]:
+def fetch_financial_index_stress(
+    corp_code: str,
+    api_key: str,
+    *,
+    quick: bool = False,
+) -> dict[str, Any]:
     """
     단일회사 주요 재무지표 fnlttSinglIndx.json
-    수익성(M210000)·안정성(M220000) 조회 후 간이 스트레스.
+    quick=True: 전년 사업보고서만(일괄 분석용, 최대 2회 HTTP).
     """
     now_y = datetime.now().year
-    reprt_codes = ("11011", "11014", "11012", "11013")  # 사업·3분기·반기·1분기
-    years = [now_y - 1, now_y - 2, now_y - 3]
+    if quick:
+        reprt_codes = ("11011",)
+        years = [now_y - 1]
+    else:
+        reprt_codes = ("11011", "11014", "11012", "11013")
+        years = [now_y - 1, now_y - 2, now_y - 3]
 
     rows_out: list[dict[str, Any]] = []
     for y in years:
@@ -936,6 +986,67 @@ def _score_fin_rows(rows: list[dict]) -> tuple[float, list[str]]:
     return min(0.35, stress), detail
 
 
+def _dart_enrich_from_corp_code(
+    key: str,
+    corp_code: str,
+    company_name: str,
+    stock_code: str | None,
+    business_number: str,
+) -> dict[str, Any]:
+    """공시번호 확정: company.json 생략, 공시·재무(quick)만."""
+    user_biz = normalize_biz_number(business_number)
+    reg = load_biz_registry().get(user_biz) if len(user_biz) == 10 else None
+    name_s = (company_name or (reg or {}).get("corp_name") or "").strip()
+    stk = _normalize_stock_code(
+        (stock_code or (reg or {}).get("stock_code") or "").strip()
+    )
+    stock_raw = stk or ""
+    listed = bool(stock_raw and stock_raw != "000000")
+    quick = in_analyze_runtime()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_disc = pool.submit(fetch_disclosure_stress, corp_code, key, quick=quick)
+        fut_fin = pool.submit(fetch_financial_index_stress, corp_code, key, quick=quick)
+        disc = fut_disc.result()
+        fin = fut_fin.result()
+
+    boost = min(
+        0.55,
+        float(disc.get("boost") or 0) + float(fin.get("financial_stress") or 0),
+    )
+    profile = {
+        "corp_name": name_s or None,
+        "stock_name": None,
+        "stock_code": stock_raw or None,
+        "ceo_nm": None,
+        "corp_cls": None,
+        "bizr_no": user_biz or None,
+        "jurir_no": None,
+        "adres": None,
+        "est_dt": None,
+        "hm_url": None,
+    }
+    out_msg = None
+    if disc.get("error"):
+        out_msg = str(disc["error"])
+    if fin.get("error") and not fin.get("financial_detail"):
+        out_msg = (out_msg + "; " if out_msg else "") + str(fin["error"])
+    return {
+        "dart_available": True,
+        "listed": listed,
+        "corp_code": corp_code,
+        "stock_code": stock_raw or None,
+        "company_profile": profile,
+        "disclosure_hits": disc.get("hits"),
+        "disclosure_sample": disc.get("sample"),
+        "financial_detail": fin.get("financial_detail"),
+        "financial_meta": fin.get("financial_meta"),
+        "credit_risk_boost": round(boost, 4),
+        "financial_stress": fin.get("financial_stress"),
+        "message": out_msg,
+    }
+
+
 def dart_enrich(
     company_name: str,
     business_number: str,
@@ -954,6 +1065,16 @@ def dart_enrich(
             "financial_stress": 0.0,
             "message": None,
         }
+
+    cc_fast = normalize_disclosure_corp_code(corp_code_override)
+    if in_analyze_runtime() and len(cc_fast) == 8:
+        return _dart_enrich_from_corp_code(
+            key,
+            cc_fast,
+            company_name,
+            stock_code,
+            business_number,
+        )
 
     row, prof, msg = resolve_corp_code(
         company_name,

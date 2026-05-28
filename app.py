@@ -8,6 +8,7 @@ import io
 import json as json_std
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -21,6 +22,7 @@ except ImportError:
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 from customer_analyzer import analyze_customer
+from services.analysis_context import analyze_runtime, set_thread_bulk_analyze
 from services.dart_service import (
     DART_BIZ_MASTER_CSV,
     DART_BIZNO_INPUT_LIST,
@@ -83,6 +85,27 @@ def _pick(row: dict, *names: str) -> str:
         if _norm_key(n) in m and (m[_norm_key(n)] or "").strip():
             return str(m[_norm_key(n)]).strip()
     return ""
+
+
+def _bulk_analyze_workers() -> int:
+    try:
+        n = int(os.environ.get("ANALYZE_BULK_WORKERS", "6"))
+    except ValueError:
+        n = 6
+    return max(1, min(n, 12))
+
+
+def _analyze_customer_row(customer: dict[str, Any]) -> dict[str, Any]:
+    set_thread_bulk_analyze(True)
+    try:
+        return analyze_customer(
+            customer.get("company_name") or "",
+            customer.get("business_number") or "",
+            customer.get("ticker_override"),
+            customer.get("dart_corp_code"),
+        )
+    finally:
+        set_thread_bulk_analyze(False)
 
 
 def parse_csv_text(text: str) -> list[dict]:
@@ -182,17 +205,12 @@ def index():
                     err = "유효한 행이 없습니다. 사업자번호(10자리) 또는 업체명+사업자번호 컬럼을 확인하세요."
                 if not err:
                     gap = float(os.environ.get("DART_ANALYZE_SLEEP_SEC") or "0")
-                    for i, c in enumerate(customers):
-                        if i and gap > 0:
-                            time.sleep(gap)
-                        results.append(
-                            analyze_customer(
-                                c.get("company_name") or "",
-                                c.get("business_number") or "",
-                                c.get("ticker_override"),
-                                c.get("dart_corp_code"),
-                            )
-                        )
+                    load_biz_registry()
+                    with analyze_runtime():
+                        for i, c in enumerate(customers):
+                            if i and gap > 0:
+                                time.sleep(gap)
+                            results.append(_analyze_customer_row(c))
             except Exception as e:
                 err = str(e)
 
@@ -226,20 +244,22 @@ def api_analyze():
         rows = payload.get("customers") or []
     out = []
     gap = float(os.environ.get("DART_ANALYZE_SLEEP_SEC") or "0")
-    for i, r in enumerate(rows):
-        if i and gap > 0:
-            time.sleep(gap)
-        out.append(
-            analyze_customer(
-                str(r.get("company_name", "")),
-                str(r.get("business_number", "")),
-                r.get("ticker_override") or r.get("ticker"),
-                normalize_disclosure_corp_code(
-                    str(r.get("dart_corp_code") or r.get("공시번호") or r.get("corp_code") or "")
+    load_biz_registry()
+    with analyze_runtime():
+        for i, r in enumerate(rows):
+            if i and gap > 0:
+                time.sleep(gap)
+            out.append(
+                analyze_customer(
+                    str(r.get("company_name", "")),
+                    str(r.get("business_number", "")),
+                    r.get("ticker_override") or r.get("ticker"),
+                    normalize_disclosure_corp_code(
+                        str(r.get("dart_corp_code") or r.get("공시번호") or r.get("corp_code") or "")
+                    )
+                    or None,
                 )
-                or None,
             )
-        )
 
     def ser(x):
         if hasattr(x, "__dataclass_fields__"):
@@ -281,38 +301,68 @@ def analyze_stream():
             gap = float(os.environ.get("DART_ANALYZE_SLEEP_SEC") or "0")
             n = len(customers)
             t0 = time.perf_counter()
-            results_payload: list[dict[str, Any]] = []
+            results_payload: list[dict[str, Any] | None] = [None] * n
+            workers = _bulk_analyze_workers()
+            load_biz_registry()
 
-            for i, c in enumerate(customers):
-                if i and gap > 0:
-                    time.sleep(gap)
-                try:
-                    row = analyze_customer(
-                        c.get("company_name") or "",
-                        c.get("business_number") or "",
-                        c.get("ticker_override"),
-                        c.get("dart_corp_code"),
-                    )
-                    results_payload.append(row)
-                except Exception as e:
-                    err = {"type": "error", "message": f"{i + 1}번째 행 분석 오류: {e}"}
-                    yield (json_std.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
-                    return
-
+            def emit_progress(done: int) -> bytes:
                 elapsed = time.perf_counter() - t0
-                cur = len(results_payload)
-                rate = elapsed / cur if cur else 0.0
-                eta_sec = max(0.0, rate * (n - cur))
+                rate = elapsed / done if done else 0.0
+                eta_sec = max(0.0, rate * (n - done))
                 prog = {
                     "type": "progress",
-                    "current": cur,
+                    "current": done,
                     "total": n,
-                    "fraction": cur / n if n else 1.0,
-                    "pct": round(100.0 * cur / n, 1) if n else 100.0,
+                    "fraction": done / n if n else 1.0,
+                    "pct": round(100.0 * done / n, 1) if n else 100.0,
                     "elapsed_sec": round(elapsed, 1),
                     "eta_sec": round(eta_sec, 1),
                 }
-                yield (json_std.dumps(prog, ensure_ascii=False) + "\n").encode("utf-8")
+                return (json_std.dumps(prog, ensure_ascii=False) + "\n").encode("utf-8")
+
+            def run_sequential() -> Iterator[bytes]:
+                with analyze_runtime():
+                    for i, c in enumerate(customers):
+                        if i and gap > 0:
+                            time.sleep(gap)
+                        try:
+                            results_payload[i] = _analyze_customer_row(c)
+                        except Exception as e:
+                            err = {"type": "error", "message": f"{i + 1}번째 행 분석 오류: {e}"}
+                            yield (json_std.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
+                            return
+                        yield emit_progress(i + 1)
+
+            def run_parallel() -> Iterator[bytes]:
+                with analyze_runtime():
+                    with ThreadPoolExecutor(max_workers=workers) as pool:
+                        futures = {
+                            pool.submit(_analyze_customer_row, c): i
+                            for i, c in enumerate(customers)
+                        }
+                        done = 0
+                        for fut in as_completed(futures):
+                            i = futures[fut]
+                            try:
+                                results_payload[i] = fut.result()
+                            except Exception as e:
+                                err = {
+                                    "type": "error",
+                                    "message": f"{i + 1}번째 행 분석 오류: {e}",
+                                }
+                                yield (json_std.dumps(err, ensure_ascii=False) + "\n").encode(
+                                    "utf-8"
+                                )
+                                return
+                            done += 1
+                            yield emit_progress(done)
+
+            if n <= 2 or workers <= 1:
+                yield from run_sequential()
+            else:
+                yield from run_parallel()
+
+            results_payload = [r for r in results_payload if r is not None]
 
             frag_ctx = analysis_results_fragment_kwargs(results_payload)
             fragment = render_template("partials/analysis_results.html", **frag_ctx)
