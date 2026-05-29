@@ -25,6 +25,13 @@ def _email_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def dashboard_url() -> str:
+    url = (os.environ.get("DASHBOARD_URL") or "https://check-company.vercel.app/").strip()
+    if not url.endswith("/"):
+        url += "/"
+    return url
+
+
 def build_email_html(
     sorted_results: list[dict[str, Any]],
     *,
@@ -42,6 +49,8 @@ def build_email_html(
         analysis_prep=prep,
         composite_weights_with_m=composite_weights_formula(include_market=True),
         composite_weights_no_m=composite_weights_formula(include_market=False),
+        dashboard_url=dashboard_url(),
+        meter_bar_width_px=360,
     )
 
 

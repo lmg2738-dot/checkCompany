@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>고객 이탈·이슈 위험 리포트</title>
 </head>
-<body style="margin:0;padding:0;background:#f7f9fc;font-family:'Segoe UI','Malgun Gothic',system-ui,sans-serif;color:#1a2332;line-height:1.55;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f9fc;padding:24px 12px;">
+<body style="margin:0;padding:0;background:#f7f9fc;font-family:'Segoe UI','Malgun Gothic',Arial,sans-serif;color:#1a2332;line-height:1.55;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f7f9fc;padding:24px 12px;">
     <tr>
       <td align="center">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:720px;background:#ffffff;border:1px solid #d8dee9;border-radius:10px;overflow:hidden;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:720px;background:#ffffff;border:1px solid #d8dee9;">
           <tr>
-            <td style="padding:28px 28px 20px;background:linear-gradient(180deg,#e8f1fc 0%,#ffffff 42%);">
-              <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;letter-spacing:-0.02em;color:#1a2332;">
+            <td style="padding:28px 28px 20px;background-color:#e8f1fc;">
+              <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1a2332;">
                 고객 이탈·이슈 위험 리포트
               </h1>
               <p style="margin:0;font-size:13px;color:#5c6978;">{{ report_date }} · 자동 발송</p>
@@ -35,10 +35,10 @@
             </td>
           </tr>
           <tr>
-            <td style="padding:0 20px 20px;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
+            <td style="padding:0 20px 12px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;font-size:13px;">
                 <thead>
-                  <tr style="background:#f0f4fa;">
+                  <tr style="background-color:#f0f4fa;">
                     <th align="left" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">순위</th>
                     <th align="left" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">업체명</th>
                     <th align="left" style="padding:10px 8px;border-bottom:2px solid #d0d9e8;font-size:12px;">사업자번호</th>
@@ -53,8 +53,17 @@
                 <tbody>
                   {% for r in top10 %}
                   {% set score = r.composite_score or 0 %}
+                  {% set churn_pct = (r.estimated_churn_probability or 0) * 100 %}
+                  {% set score_cap = [100, score]|min %}
+                  {% set churn_cap = [100, churn_pct]|min %}
+                  {% set score_fill = ((meter_bar_width_px * score_cap / 100)|round(0, 'floor'))|int %}
+                  {% set churn_fill = ((meter_bar_width_px * churn_cap / 100)|round(0, 'floor'))|int %}
+                  {% set score_rest = meter_bar_width_px - score_fill %}
+                  {% set churn_rest = meter_bar_width_px - churn_fill %}
+                  {% if score_fill < 4 and score_cap > 0 %}{% set score_fill = 4 %}{% set score_rest = meter_bar_width_px - 4 %}{% endif %}
+                  {% if churn_fill < 4 and churn_cap > 0 %}{% set churn_fill = 4 %}{% set churn_rest = meter_bar_width_px - 4 %}{% endif %}
                   {% set row_bg = '#fdecef' if score >= 60 else ('#fff6e9' if score >= 45 else '#ffffff') %}
-                  <tr style="background:{{ row_bg }};">
+                  <tr style="background-color:{{ row_bg }};">
                     <td style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-weight:700;color:#1a5fb4;">{{ loop.index }}</td>
                     <td style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-weight:600;">{{ r.company_name or '(이름 없음)' }}</td>
                     <td style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-family:Consolas,monospace;font-size:12px;">{{ r.business_number }}</td>
@@ -62,7 +71,7 @@
                       {% if r.ticker %}{{ r.ticker }}{% else %}<span style="color:#8a96a8;">종목 없음</span>{% endif %}
                     </td>
                     <td align="right" style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-weight:700;">{{ '%.1f'|format(score) }}</td>
-                    <td align="right" style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-weight:700;color:#c01c28;">{{ '%.1f%%'|format((r.estimated_churn_probability or 0) * 100) }}</td>
+                    <td align="right" style="padding:9px 8px;border-bottom:1px solid #e8edf4;font-weight:700;color:#c01c28;">{{ '%.1f%%'|format(churn_pct) }}</td>
                     <td align="right" style="padding:9px 8px;border-bottom:1px solid #e8edf4;">{{ '%.2f'|format(r.estimate.news_risk) }}</td>
                     <td align="right" style="padding:9px 8px;border-bottom:1px solid #e8edf4;">
                       {{ '%.2f'|format(r.estimate.market_risk) }}
@@ -71,25 +80,31 @@
                     <td align="right" style="padding:9px 8px;border-bottom:1px solid #e8edf4;">{{ '%.2f'|format(r.estimate.credit_risk) }}</td>
                   </tr>
                   <tr>
-                    <td colspan="9" style="padding:0 8px 12px 8px;border-bottom:1px solid #e8edf4;">
-                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:11px;color:#5c6978;">
+                    <td colspan="9" style="padding:0 8px 14px 8px;border-bottom:1px solid #e8edf4;background-color:{{ row_bg }};">
+                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:11px;color:#5c6978;">
                         <tr>
-                          <td width="88" style="padding:4px 0 2px;vertical-align:middle;">복합 위험</td>
-                          <td style="padding:4px 0 2px;vertical-align:middle;">
-                            <div style="height:8px;background:#e2e8f2;border-radius:999px;overflow:hidden;">
-                              <div style="height:8px;width:{{ [100, score]|min }}%;background:linear-gradient(90deg,#3584e4,#1a5fb4);border-radius:999px;"></div>
-                            </div>
+                          <td width="88" style="padding:4px 8px 4px 0;vertical-align:middle;">복합 위험</td>
+                          <td style="padding:4px 0;vertical-align:middle;">
+                            <table role="presentation" width="{{ meter_bar_width_px }}" cellpadding="0" cellspacing="0" border="0" style="width:{{ meter_bar_width_px }}px;max-width:100%;border-collapse:collapse;">
+                              <tr>
+                                <td width="{{ score_fill }}" height="12" bgcolor="#1a5fb4" style="width:{{ score_fill }}px;height:12px;background-color:#1a5fb4;mso-line-height-rule:exactly;line-height:12px;font-size:0;">&nbsp;</td>
+                                <td width="{{ score_rest }}" height="12" bgcolor="#e2e8f2" style="width:{{ score_rest }}px;height:12px;background-color:#e2e8f2;line-height:12px;font-size:0;">&nbsp;</td>
+                              </tr>
+                            </table>
                           </td>
-                          <td width="48" align="right" style="padding:4px 0 2px;font-weight:600;">{{ '%.0f'|format(score) }}</td>
+                          <td width="48" align="right" style="padding:4px 0 4px 8px;font-weight:700;color:#1a5fb4;vertical-align:middle;">{{ '%.0f'|format(score_cap) }}</td>
                         </tr>
                         <tr>
-                          <td style="padding:2px 0 0;vertical-align:middle;">추정 이탈</td>
+                          <td style="padding:2px 8px 0 0;vertical-align:middle;">추정 이탈</td>
                           <td style="padding:2px 0 0;vertical-align:middle;">
-                            <div style="height:8px;background:#e2e8f2;border-radius:999px;overflow:hidden;">
-                              <div style="height:8px;width:{{ [100, (r.estimated_churn_probability or 0) * 100]|min }}%;background:linear-gradient(90deg,#e01b24,#f66151);border-radius:999px;"></div>
-                            </div>
+                            <table role="presentation" width="{{ meter_bar_width_px }}" cellpadding="0" cellspacing="0" border="0" style="width:{{ meter_bar_width_px }}px;max-width:100%;border-collapse:collapse;">
+                              <tr>
+                                <td width="{{ churn_fill }}" height="12" bgcolor="#e01b24" style="width:{{ churn_fill }}px;height:12px;background-color:#e01b24;mso-line-height-rule:exactly;line-height:12px;font-size:0;">&nbsp;</td>
+                                <td width="{{ churn_rest }}" height="12" bgcolor="#e2e8f2" style="width:{{ churn_rest }}px;height:12px;background-color:#e2e8f2;line-height:12px;font-size:0;">&nbsp;</td>
+                              </tr>
+                            </table>
                           </td>
-                          <td align="right" style="padding:2px 0 0;font-weight:600;color:#c01c28;">{{ '%.0f'|format((r.estimated_churn_probability or 0) * 100) }}%</td>
+                          <td align="right" style="padding:2px 0 0 8px;font-weight:700;color:#c01c28;vertical-align:middle;">{{ '%.0f'|format(churn_cap) }}%</td>
                         </tr>
                       </table>
                     </td>
@@ -100,9 +115,26 @@
             </td>
           </tr>
           <tr>
-            <td style="padding:8px 28px 24px;background:#f8fafc;border-top:1px solid #e8edf4;">
+            <td align="center" style="padding:8px 28px 24px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="center" bgcolor="#1a5fb4" style="background-color:#1a5fb4;border-radius:8px;">
+                    <a href="{{ dashboard_url }}" target="_blank" rel="noopener noreferrer"
+                      style="display:inline-block;padding:14px 28px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;">
+                      전체보기 · 대시보드 바로가기
+                    </a>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:12px 0 0;font-size:12px;color:#5c6978;">
+                <a href="{{ dashboard_url }}" target="_blank" rel="noopener noreferrer" style="color:#1a5fb4;text-decoration:underline;">{{ dashboard_url }}</a>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 28px 24px;background-color:#f8fafc;border-top:1px solid #e8edf4;">
               <div style="font-size:12px;color:#5c6978;">
-                <p style="margin:0 0 10px;"><strong style="color:#2e4057;">복합점수</strong> : 참여(E)·뉴스(N)·시장(M)·신용(C) 가중 합(기본 <code style="background:#eef2f8;padding:2px 6px;border-radius:4px;">{{ composite_weights_with_m }}</code>). <strong>종목 코드가 없으면</strong> <code style="background:#eef2f8;padding:2px 6px;border-radius:4px;">{{ composite_weights_no_m }}</code></p>
+                <p style="margin:0 0 10px;"><strong style="color:#2e4057;">복합점수</strong> : 참여(E)·뉴스(N)·시장(M)·신용(C) 가중 합(기본 <code style="background:#eef2f8;padding:2px 6px;">{{ composite_weights_with_m }}</code>). <strong>종목 코드가 없으면</strong> <code style="background:#eef2f8;padding:2px 6px;">{{ composite_weights_no_m }}</code></p>
                 <p style="margin:0 0 10px;"><strong style="color:#2e4057;">추정이탈</strong> : 위 복합점수에서 로지스틱 변환으로 둔 <strong>이탈 가능성 추정값</strong>입니다(표에서는 %).</p>
                 <p style="margin:0 0 10px;"><strong style="color:#2e4057;">N</strong> : News — 뉴스 RSS 제목·요약 속 부정·재무 성격 키워드(0~1 소수).</p>
                 <p style="margin:0 0 10px;"><strong style="color:#2e4057;">M</strong> : Market — 주가 수익률·변동성(종목·시세 있을 때). <strong>종목 없음</strong>이면 표에만 참고(보조값)이고 <strong>복합점수에는 미반영</strong>.</p>
