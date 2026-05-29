@@ -442,23 +442,85 @@ def analysis_results_fragment_kwargs(
     }
 
 
+def _cron_secret_value() -> str:
+    raw = (os.environ.get("CRON_SECRET") or "").strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        raw = raw[1:-1].strip()
+    return raw
+
+
+def _header_get(name: str) -> str:
+    """Flask headers + WSGI environ fallback (Vercel rewrite 호환)."""
+    v = (request.headers.get(name) or "").strip()
+    if v:
+        return v
+    key = "HTTP_" + name.upper().replace("-", "_")
+    return (request.environ.get(key) or "").strip()
+
+
+def _is_vercel_cron_invoke() -> bool:
+    if _header_get("x-vercel-cron") == "1":
+        return True
+    if _header_get("x-vercel-cron-schedule"):
+        return True
+    return False
+
+
+def _cron_auth_status() -> dict[str, Any]:
+    expected = _cron_secret_value()
+    auth = _header_get("Authorization")
+    bearer_ok = False
+    if expected and auth:
+        if auth == f"Bearer {expected}":
+            bearer_ok = True
+        elif auth.lower().startswith("bearer "):
+            bearer_ok = auth[7:].strip() == expected
+        elif auth == expected:
+            bearer_ok = True
+    vercel_cron = _is_vercel_cron_invoke()
+    return {
+        "cron_secret_configured": bool(expected),
+        "authorization_header_present": bool(auth),
+        "bearer_matches": bearer_ok,
+        "vercel_cron_headers": vercel_cron,
+        "authorized": (not expected) or bearer_ok or vercel_cron,
+    }
+
+
 def _cron_authorized() -> bool:
-    """Vercel Cron 호출 또는 CRON_SECRET Bearer."""
-    if (request.headers.get("x-vercel-cron") or "").strip() == "1":
-        return True
-    if (request.headers.get("x-vercel-cron-schedule") or "").strip():
-        return True
+    return bool(_cron_auth_status()["authorized"])
 
-    expected = (os.environ.get("CRON_SECRET") or "").strip()
-    if not expected:
-        return True
 
-    auth = (request.headers.get("Authorization") or "").strip()
-    if auth.lower().startswith("bearer "):
-        token = auth[7:].strip()
-    else:
-        token = auth
-    return token == expected
+def _cron_unauthorized_response() -> tuple[Any, int]:
+    st = _cron_auth_status()
+    hint = (
+        "Authorization: Bearer <CRON_SECRET> 헤더가 필요합니다. "
+        "Vercel Production 환경변수 CRON_SECRET 과 동일한 값을 넣으세요. "
+        "브라우저 주소창만으로는 호출할 수 없습니다."
+    )
+    if st["cron_secret_configured"] and not st["authorization_header_present"]:
+        hint = (
+            "CRON_SECRET 이 설정되어 있습니다. 예: "
+            'curl -H "Authorization: Bearer YOUR_SECRET" '
+            "https://check-company.vercel.app/api/cron/daily-risk-email"
+        )
+    return (
+        jsonify(
+            {
+                "ok": False,
+                "error": "unauthorized",
+                "hint": hint,
+                "auth_check": st,
+            }
+        ),
+        401,
+    )
+
+
+@app.route("/api/cron/auth-check", methods=["GET", "HEAD"])
+def cron_auth_check():
+    """Cron 인증 디버그(시크릿 값은 노출하지 않음)."""
+    return jsonify(_cron_auth_status())
 
 
 @app.route("/api/cron/daily-risk-email", methods=["GET", "POST"])
@@ -468,7 +530,7 @@ def cron_daily_risk_email():
     01:00 UTC = 10:00~10:59 KST (Hobby는 해당 시각대 내 임의 시각).
     """
     if not _cron_authorized():
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
+        return _cron_unauthorized_response()
 
     schedule_hdr = (request.headers.get("x-vercel-cron-schedule") or "").strip()
 
@@ -524,7 +586,7 @@ def cron_disclosure_refresh():
     CRON_SECRET 설정 시: Authorization: Bearer <CRON_SECRET>
     """
     if not _cron_authorized():
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
+        return _cron_unauthorized_response()
 
     if supabase_customers is None or not supabase_customers.is_configured():
         return jsonify({"ok": False, "error": "supabase not configured"}), 503
