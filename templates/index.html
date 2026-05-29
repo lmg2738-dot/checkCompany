@@ -17,6 +17,7 @@
         <button type="button" class="btn-enrich" id="enrich-btn"
           data-stream-url="{{ url_for('enrich_stream') }}"
           data-label-default="업체정보갱신"
+          data-confirm-message="해당 데이터는 DART API를 통해 사업자등록번호로 공시번호 등을 업데이트합니다.&#10;&#10;시간이 오래 걸릴 수 있으니 수작업은 지양해 주시기 바랍니다."
           {% if missing_disclosure_count is not none %}
           title="공시번호 없음 {{ missing_disclosure_count }}건"
           {% endif %}>
@@ -452,7 +453,15 @@
     }
   }
 
+  var confirmMessage =
+    btn.getAttribute("data-confirm-message")
+    || "해당 데이터는 DART API를 통해 사업자등록번호로 공시번호 등을 업데이트합니다.\n\n시간이 오래 걸릴 수 있으니 수작업은 지양해 주시기 바랍니다.";
+
   btn.addEventListener("click", function () {
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
     if (!supportsStreamFetch()) {
       showStop("이 브라우저는 스트리밍 갱신을 지원하지 않습니다.");
       return;
