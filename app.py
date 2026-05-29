@@ -98,35 +98,150 @@ def _ndjson_stream_headers() -> dict[str, str]:
     }
 
 
-def run_daily_risk_email_job() -> dict[str, Any]:
-    """10시 Cron 과 동일 — 전체 분석 후 위험 상위 10개 메일 발송."""
-    from services.bulk_analyze import run_bulk_customer_analysis
+def _iter_risk_email_job_events() -> Iterator[dict[str, Any]]:
+    """화면 메일발송·Vercel Cron 공통 — 분석 후 Resend 발송 이벤트."""
     from services.daily_risk_email import email_subject, send_daily_risk_report
     from services.resend_client import resend_configured
 
+    yield {
+        "type": "progress",
+        "phase": "connecting",
+        "current": 0,
+        "total": 0,
+        "fraction": 0,
+        "pct": 0,
+        "elapsed_sec": 0,
+        "eta_sec": None,
+        "message": "시도 중… 서버에 연결합니다.",
+    }
+
     if not resend_configured():
-        raise RuntimeError(
-            "Resend 미설정 (RESEND_API_KEY, RESEND_FROM, RESEND_TO)"
-        )
+        yield {
+            "type": "error",
+            "message": "Resend 가 설정되지 않았습니다. (RESEND_API_KEY, RESEND_FROM, RESEND_TO)",
+        }
+        return
+
+    yield {"type": "info", "message": "시도 중… 분석 대상 고객 목록을 준비합니다."}
 
     customers, prep = prepare_customers_for_analysis("")
     if not customers:
-        raise RuntimeError(
-            f"분석 가능한 고객이 없습니다. (전체 {prep.get('total_raw', 0)}건, "
-            f"공시 제외 {prep.get('skipped_no_disclosure', 0)}건)"
-        )
+        msg = "공시번호(8자리)가 있는 고객이 없어 메일을 보낼 수 없습니다."
+        if prep.get("total_raw"):
+            msg += (
+                f" (전체 {prep['total_raw']}건, "
+                f"제외 {prep.get('skipped_no_disclosure', 0)}건)"
+            )
+        yield {"type": "error", "message": msg}
+        return
 
-    results = run_bulk_customer_analysis(customers)
-    sorted_rows = sorted_results_for_template(results)
-    mail = send_daily_risk_report(sorted_rows, prep_meta=prep)
-    return {
-        "ok": True,
-        "subject": email_subject(),
-        "analyzed_count": len(results),
-        "emailed_top": min(10, len(sorted_rows)),
-        "prep": prep,
-        **mail,
+    if prep.get("skipped_no_disclosure"):
+        yield {
+            "type": "info",
+            "message": (
+                f"공시번호 없음 {prep['skipped_no_disclosure']}건 제외 · "
+                f"분석 {prep.get('count', 0)}건"
+            ),
+        }
+
+    n = len(customers)
+    t0 = time.perf_counter()
+    gap = float(os.environ.get("DART_ANALYZE_SLEEP_SEC") or "0")
+    workers = _bulk_analyze_workers()
+    load_biz_registry()
+    results_payload: list[dict[str, Any] | None] = [None] * n
+
+    def progress_event(done: int) -> dict[str, Any]:
+        elapsed = time.perf_counter() - t0
+        rate = elapsed / done if done else 0.0
+        eta_sec = max(0.0, rate * (n - done))
+        return {
+            "type": "progress",
+            "phase": "analyzing",
+            "current": done,
+            "total": n,
+            "fraction": done / n if n else 1.0,
+            "pct": round(100.0 * done / n, 1) if n else 100.0,
+            "elapsed_sec": round(elapsed, 1),
+            "eta_sec": round(eta_sec, 1),
+            "message": f"위험 분석 중: {done} / {n}건",
+        }
+
+    with analyze_runtime():
+        if n <= 2 or workers <= 1:
+            for i, c in enumerate(customers):
+                if i and gap > 0:
+                    time.sleep(gap)
+                try:
+                    results_payload[i] = _analyze_customer_row(c)
+                except Exception as e:
+                    yield {
+                        "type": "error",
+                        "message": f"{i + 1}번째 행 분석 오류: {e}",
+                    }
+                    return
+                yield progress_event(i + 1)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(_analyze_customer_row, c): i
+                    for i, c in enumerate(customers)
+                }
+                done = 0
+                for fut in as_completed(futures):
+                    i = futures[fut]
+                    try:
+                        results_payload[i] = fut.result()
+                    except Exception as e:
+                        yield {
+                            "type": "error",
+                            "message": f"{i + 1}번째 행 분석 오류: {e}",
+                        }
+                        return
+                    done += 1
+                    yield progress_event(done)
+
+    results_payload = [r for r in results_payload if r is not None]
+    sorted_rows = sorted_results_for_template(results_payload)
+
+    yield {
+        "type": "info",
+        "message": f"분석 완료 · 위험 상위 {min(10, len(sorted_rows))}개 메일 발송 중…",
     }
+    yield {
+        "type": "progress",
+        "phase": "sending",
+        "current": n,
+        "total": n,
+        "fraction": 1.0,
+        "pct": 100.0,
+        "elapsed_sec": round(time.perf_counter() - t0, 1),
+        "eta_sec": 0,
+        "message": "Resend 로 메일을 보내는 중…",
+    }
+
+    mail = send_daily_risk_report(sorted_rows, prep_meta=prep)
+    yield {
+        "type": "done",
+        "subject": email_subject(),
+        "analyzed_count": len(results_payload),
+        "emailed_top": min(10, len(sorted_rows)),
+        "to": mail.get("to"),
+        "message": "메일 발송이 완료되었습니다.",
+    }
+
+
+def run_daily_risk_email_job() -> dict[str, Any]:
+    """동기 실행(스크립트·테스트용)."""
+    last_done: dict[str, Any] | None = None
+    for ev in _iter_risk_email_job_events():
+        if ev.get("type") == "error":
+            raise RuntimeError(str(ev.get("message") or "이메일 발송 실패"))
+        if ev.get("type") == "done":
+            last_done = ev
+    if not last_done:
+        raise RuntimeError("이메일 작업이 완료되지 않았습니다.")
+    return {"ok": True, **last_done}
 
 
 def csv_preview_fragment(csv_text: str) -> str:
@@ -328,9 +443,16 @@ def analysis_results_fragment_kwargs(
 
 
 def _cron_authorized() -> bool:
+    """Vercel Cron 호출 또는 CRON_SECRET Bearer."""
+    if (request.headers.get("x-vercel-cron") or "").strip() == "1":
+        return True
+    if (request.headers.get("x-vercel-cron-schedule") or "").strip():
+        return True
+
     expected = (os.environ.get("CRON_SECRET") or "").strip()
     if not expected:
         return True
+
     auth = (request.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
         token = auth[7:].strip()
@@ -342,22 +464,36 @@ def _cron_authorized() -> bool:
 @app.route("/api/cron/daily-risk-email", methods=["GET", "POST"])
 def cron_daily_risk_email():
     """
-    매일 오전 10시(KST) Vercel Cron — 전체 분석 후 위험 상위 10개를 Resend 로 발송.
-    CRON_SECRET 설정 시: Authorization: Bearer <CRON_SECRET>
+    매일 오전 10시(KST) Vercel Cron — 화면 메일발송과 동일(스트리밍).
+    01:00 UTC = 10:00~10:59 KST (Hobby는 해당 시각대 내 임의 시각).
     """
     if not _cron_authorized():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
-    try:
-        body = run_daily_risk_email_job()
-        return jsonify(
-            {
-                **body,
-                "schedule_note": "Vercel Cron 01:00 UTC = 10:00 KST",
-            }
+    schedule_hdr = (request.headers.get("x-vercel-cron-schedule") or "").strip()
+
+    def chunks() -> Iterator[bytes]:
+        print(
+            f"[cron] daily-risk-email start schedule={schedule_hdr or 'manual'}",
+            flush=True,
         )
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        try:
+            for ev in _iter_risk_email_job_events():
+                et = ev.get("type")
+                if et in ("info", "error", "done"):
+                    print(f"[cron] {et}: {ev.get('message', ev)}", flush=True)
+                yield _ndjson_line(ev)
+                if et == "error":
+                    return
+        except Exception as e:
+            print(f"[cron] fatal: {e}", flush=True)
+            yield _ndjson_line({"type": "error", "message": str(e)})
+
+    return Response(
+        stream_with_context(chunks()),
+        mimetype="application/x-ndjson; charset=utf-8",
+        headers=_ndjson_stream_headers(),
+    )
 
 
 @app.route("/api/send-risk-email_stream", methods=["POST"])
@@ -366,158 +502,10 @@ def send_risk_email_stream():
 
     def chunks() -> Iterator[bytes]:
         try:
-            yield _ndjson_line(
-                {
-                    "type": "progress",
-                    "phase": "connecting",
-                    "current": 0,
-                    "total": 0,
-                    "fraction": 0,
-                    "pct": 0,
-                    "elapsed_sec": 0,
-                    "eta_sec": None,
-                    "message": "시도 중… 서버에 연결합니다.",
-                }
-            )
-
-            from services.resend_client import resend_configured
-
-            if not resend_configured():
-                yield _ndjson_line(
-                    {
-                        "type": "error",
-                        "message": "Resend 가 설정되지 않았습니다. (RESEND_API_KEY, RESEND_FROM, RESEND_TO)",
-                    }
-                )
-                return
-
-            yield _ndjson_line(
-                {"type": "info", "message": "시도 중… 분석 대상 고객 목록을 준비합니다."}
-            )
-
-            customers, prep = prepare_customers_for_analysis("")
-            if not customers:
-                msg = "공시번호(8자리)가 있는 고객이 없어 메일을 보낼 수 없습니다."
-                if prep.get("total_raw"):
-                    msg += (
-                        f" (전체 {prep['total_raw']}건, "
-                        f"제외 {prep.get('skipped_no_disclosure', 0)}건)"
-                    )
-                yield _ndjson_line({"type": "error", "message": msg})
-                return
-
-            if prep.get("skipped_no_disclosure"):
-                yield _ndjson_line(
-                    {
-                        "type": "info",
-                        "message": (
-                            f"공시번호 없음 {prep['skipped_no_disclosure']}건 제외 · "
-                            f"분석 {prep.get('count', 0)}건"
-                        ),
-                    }
-                )
-
-            from services.bulk_analyze import run_bulk_customer_analysis
-            from services.daily_risk_email import email_subject, send_daily_risk_report
-
-            n = len(customers)
-            t0 = time.perf_counter()
-            gap = float(os.environ.get("DART_ANALYZE_SLEEP_SEC") or "0")
-            workers = _bulk_analyze_workers()
-            load_biz_registry()
-            results_payload: list[dict[str, Any] | None] = [None] * n
-
-            def emit_progress(done: int) -> bytes:
-                elapsed = time.perf_counter() - t0
-                rate = elapsed / done if done else 0.0
-                eta_sec = max(0.0, rate * (n - done))
-                return _ndjson_line(
-                    {
-                        "type": "progress",
-                        "phase": "analyzing",
-                        "current": done,
-                        "total": n,
-                        "fraction": done / n if n else 1.0,
-                        "pct": round(100.0 * done / n, 1) if n else 100.0,
-                        "elapsed_sec": round(elapsed, 1),
-                        "eta_sec": round(eta_sec, 1),
-                        "message": f"위험 분석 중: {done} / {n}건",
-                    }
-                )
-
-            with analyze_runtime():
-                if n <= 2 or workers <= 1:
-                    for i, c in enumerate(customers):
-                        if i and gap > 0:
-                            time.sleep(gap)
-                        try:
-                            results_payload[i] = _analyze_customer_row(c)
-                        except Exception as e:
-                            yield _ndjson_line(
-                                {
-                                    "type": "error",
-                                    "message": f"{i + 1}번째 행 분석 오류: {e}",
-                                }
-                            )
-                            return
-                        yield emit_progress(i + 1)
-                else:
-                    with ThreadPoolExecutor(max_workers=workers) as pool:
-                        futures = {
-                            pool.submit(_analyze_customer_row, c): i
-                            for i, c in enumerate(customers)
-                        }
-                        done = 0
-                        for fut in as_completed(futures):
-                            i = futures[fut]
-                            try:
-                                results_payload[i] = fut.result()
-                            except Exception as e:
-                                yield _ndjson_line(
-                                    {
-                                        "type": "error",
-                                        "message": f"{i + 1}번째 행 분석 오류: {e}",
-                                    }
-                                )
-                                return
-                            done += 1
-                            yield emit_progress(done)
-
-            results_payload = [r for r in results_payload if r is not None]
-            sorted_rows = sorted_results_for_template(results_payload)
-
-            yield _ndjson_line(
-                {
-                    "type": "info",
-                    "message": f"분석 완료 · 위험 상위 {min(10, len(sorted_rows))}개 메일 발송 중…",
-                }
-            )
-            yield _ndjson_line(
-                {
-                    "type": "progress",
-                    "phase": "sending",
-                    "current": n,
-                    "total": n,
-                    "fraction": 1.0,
-                    "pct": 100.0,
-                    "elapsed_sec": round(time.perf_counter() - t0, 1),
-                    "eta_sec": 0,
-                    "message": "Resend 로 메일을 보내는 중…",
-                }
-            )
-
-            mail = send_daily_risk_report(sorted_rows, prep_meta=prep)
-            yield _ndjson_line(
-                {
-                    "type": "done",
-                    "subject": email_subject(),
-                    "analyzed_count": len(results_payload),
-                    "emailed_top": min(10, len(sorted_rows)),
-                    "to": mail.get("to"),
-                    "message": "메일 발송이 완료되었습니다.",
-                }
-            )
-
+            for ev in _iter_risk_email_job_events():
+                yield _ndjson_line(ev)
+                if ev.get("type") == "error":
+                    return
         except Exception as e:
             yield _ndjson_line({"type": "error", "message": str(e)})
 
@@ -588,6 +576,15 @@ def api_health():
         body["resend"] = config_status()
     except Exception as e:
         body["resend"] = {"resend_ready": False, "error": str(e)[:200]}
+
+    body["cron"] = {
+        "daily_risk_email_path": "/api/cron/daily-risk-email",
+        "vercel_schedule_utc": "0 1 * * *",
+        "kst_window": "10:00~10:59 (Hobby는 해당 시각대 내 임의 실행)",
+        "cron_secret_set": bool((os.environ.get("CRON_SECRET") or "").strip()),
+        "function_max_duration_sec": 300,
+        "note": "Vercel 대시보드 → Cron Jobs → View Logs 에서 401/504 확인",
+    }
 
     return jsonify(body)
 

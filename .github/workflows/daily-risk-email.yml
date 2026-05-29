@@ -1,0 +1,45 @@
+# Vercel Cron 백업 — 매일 10시(KST) 전후 일일 리포트 메일
+# (화면 메일발송과 동일 API, 최대 10분 대기)
+name: Daily risk report email
+
+on:
+  schedule:
+    # 01:00 UTC = 10:00 KST
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  send-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Trigger email via production API
+        env:
+          APP_URL: ${{ vars.APP_URL || 'https://check-company.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          URL="${APP_URL%/}/api/send-risk-email_stream"
+          echo "POST $URL"
+          AUTH=()
+          if [ -n "${CRON_SECRET:-}" ]; then
+            AUTH=(-H "Authorization: Bearer ${CRON_SECRET}")
+          fi
+          curl -fsS -X POST "${AUTH[@]}" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/x-ndjson" \
+            --max-time 600 \
+            -d '{}' \
+            -o /tmp/email-stream.ndjson \
+            "$URL"
+          echo "--- last events ---"
+          tail -n 5 /tmp/email-stream.ndjson
+          if grep -q '"type": "error"' /tmp/email-stream.ndjson; then
+            echo "Email job reported error"
+            exit 1
+          fi
+          if ! grep -q '"type": "done"' /tmp/email-stream.ndjson; then
+            echo "Email job did not complete"
+            exit 1
+          fi
+          echo "OK"
