@@ -147,8 +147,23 @@ def _friendly_resend_error(
     except Exception:
         pass
 
+    low = msg.lower()
     if status_code == 403 and (
-        "testing emails" in msg.lower() or "verify a domain" in msg.lower()
+        "domain is not verified" in low or "not verified" in low and "domain" in low
+    ):
+        domain_hint = "cj.net"
+        m_dom = re.search(r"the\s+([a-z0-9.-]+)\s+domain\s+is\s+not\s+verified", low)
+        if m_dom:
+            domain_hint = m_dom.group(1)
+        return (
+            f"Resend: {domain_hint} 도메인이 아직 'Verified' 상태가 아닙니다. "
+            "https://resend.com/domains 에서 도메인을 열고 DNS 레코드(SPF·DKIM 등)를 "
+            "회사 DNS에 모두 추가한 뒤, 상태가 Verified 로 바뀔 때까지 기다려 주세요. "
+            f"(현재 발신: {sender})"
+        )
+
+    if status_code == 403 and (
+        "testing emails" in low or "verify a domain" in low
     ):
         allowed_hint = ""
         m = re.search(
