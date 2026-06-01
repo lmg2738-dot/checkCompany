@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>업체정보 갱신 · Supabase</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <main class="layout-main customers-enrich-page">
+    <header class="hero panel sheet">
+      <div class="hero-head-row">
+        <h1>업체정보 갱신</h1>
+        <div class="hero-head-actions">
+          <a href="{{ url_for('index') }}" class="btn-link-back">← 리포트로</a>
+        </div>
+      </div>
+      <p class="sub">
+        Supabase <strong>customers</strong> 중 <strong>사업자번호만</strong> 등록된 항목입니다.
+        행마다 DART에서 업체명·공시번호·종목코드를 조회해 갱신합니다. (최신 등록순)
+      </p>
+      <p class="customer-source-note muted">
+        대기 {{ pending_rows|length }}건
+        {% if missing_disclosure_count is not none %}
+        · 전체 미보강 공시 {{ missing_disclosure_count }}건
+        {% endif %}
+      </p>
+      {% if error %}
+      <div class="alert alert-error" role="alert">{{ error }}</div>
+      {% endif %}
+    </header>
+
+    <section class="panel sheet">
+      <h2>사업자번호 추가</h2>
+      <form id="add-biz-form" class="add-biz-form" novalidate>
+        <label for="new_biz_input">사업자번호 (10자리)</label>
+        <div class="add-biz-row">
+          <input type="text" id="new_biz_input" class="biz-input" inputmode="numeric"
+            maxlength="12" placeholder="예: 1018109147" autocomplete="off" />
+          <button type="submit" class="btn-primary" id="add-biz-submit">등록</button>
+        </div>
+      </form>
+      <div id="add-biz-alert" class="alert" hidden role="alert"></div>
+    </section>
+
+    <section class="panel sheet">
+      <div class="csv-preview-head">
+        <h2 class="enrich-table-title">갱신 대기 목록</h2>
+        <span class="csv-preview-note">전체 : {{ pending_rows|length }}건</span>
+      </div>
+      <div id="page-alert" class="alert" hidden role="alert"></div>
+      <div class="table-wrap">
+        <table class="sheet-data-table enrich-manage-table" id="pending-table">
+          <thead>
+            <tr>
+              <th>사업자번호</th>
+              <th>업체명</th>
+              <th>공시번호</th>
+              <th>종목코드</th>
+              <th>등록일시</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="pending-tbody">
+            {% for r in pending_rows %}
+            <tr data-biz="{{ r.business_number }}">
+              <td class="td-mono col-biz">{{ r.business_number }}</td>
+              <td class="col-name">{{ r.company_name or '—' }}</td>
+              <td class="td-mono col-corp">{{ r.disclosure_corp_code or '—' }}</td>
+              <td class="td-mono col-stock">{{ r.stock_code or '—' }}</td>
+              <td class="col-created muted">{{ r.created_at_display or '—' }}</td>
+              <td class="col-action">
+                <button type="button" class="btn-row-enrich" data-biz="{{ r.business_number }}">갱신</button>
+              </td>
+            </tr>
+            {% else %}
+            <tr id="empty-row">
+              <td colspan="6" class="muted enrich-empty-cell">사업자번호만 등록된 항목이 없습니다. 위에서 추가하세요.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+<script>
+(function () {
+  var addForm = document.getElementById("add-biz-form");
+  var addInput = document.getElementById("new_biz_input");
+  var addAlert = document.getElementById("add-biz-alert");
+  var pageAlert = document.getElementById("page-alert");
+  var tbody = document.getElementById("pending-tbody");
+
+  function showAlert(el, msg, isError) {
+    if (!el) return;
+    el.textContent = msg;
+    el.hidden = false;
+    el.classList.toggle("alert-error", !!isError);
+  }
+
+  function hideAlert(el) {
+    if (!el) return;
+    el.hidden = true;
+    el.textContent = "";
+  }
+
+  function escapeHtml(s) {
+    return String(s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function formatCreated(iso) {
+    if (!iso) return "—";
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString("ko-KR");
+    } catch (_) {
+      return iso;
+    }
+  }
+
+  function prependRow(row) {
+    var empty = document.getElementById("empty-row");
+    if (empty) empty.remove();
+    var tr = document.createElement("tr");
+    tr.setAttribute("data-biz", row.business_number);
+    tr.innerHTML =
+      '<td class="td-mono col-biz">' + escapeHtml(row.business_number) + "</td>" +
+      '<td class="col-name">—</td>' +
+      '<td class="td-mono col-corp">—</td>' +
+      '<td class="td-mono col-stock">—</td>' +
+      '<td class="col-created muted">' + escapeHtml(formatCreated(row.created_at)) + "</td>" +
+      '<td class="col-action"><button type="button" class="btn-row-enrich" data-biz="' +
+      escapeHtml(row.business_number) + '">갱신</button></td>';
+    if (tbody.firstChild) {
+      tbody.insertBefore(tr, tbody.firstChild);
+    } else {
+      tbody.appendChild(tr);
+    }
+    bindRowButtons(tr);
+  }
+
+  function updateRowFromResult(biz, data) {
+    var tr = tbody.querySelector('tr[data-biz="' + biz + '"]');
+    if (!tr) return;
+    if (data.ok && data.row) {
+      tr.querySelector(".col-name").textContent = data.row.company_name || "—";
+      tr.querySelector(".col-corp").textContent = data.row.disclosure_corp_code || "—";
+      tr.querySelector(".col-stock").textContent = data.row.stock_code || "—";
+      if (data.row.disclosure_corp_code && data.row.disclosure_corp_code.length === 8) {
+        tr.remove();
+      }
+    }
+  }
+
+  function enrichOne(biz, btn) {
+    hideAlert(pageAlert);
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "갱신 중…";
+    }
+    return fetch("/api/customers/enrich-one", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ business_number: biz }),
+      credentials: "same-origin",
+    })
+      .then(function (resp) {
+        return resp.json().then(function (data) {
+          if (!resp.ok) throw new Error(data.message || data.error || "갱신 실패");
+          return data;
+        });
+      })
+      .then(function (data) {
+        updateRowFromResult(biz, data);
+        showAlert(pageAlert, data.message || "갱신 완료", false);
+      })
+      .catch(function (err) {
+        showAlert(pageAlert, err.message || String(err), true);
+      })
+      .finally(function () {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "갱신";
+        }
+      });
+  }
+
+  function bindRowButtons(root) {
+    var scope = root || document;
+    scope.querySelectorAll(".btn-row-enrich").forEach(function (btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", function () {
+        enrichOne(btn.getAttribute("data-biz"), btn);
+      });
+    });
+  }
+
+  bindRowButtons(document);
+
+  if (addForm) {
+    addForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      hideAlert(addAlert);
+      var raw = (addInput && addInput.value) || "";
+      var submitBtn = document.getElementById("add-biz-submit");
+      if (submitBtn) submitBtn.disabled = true;
+      fetch("/api/customers/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ business_number: raw }),
+        credentials: "same-origin",
+      })
+        .then(function (resp) {
+          return resp.json().then(function (data) {
+            if (!resp.ok) throw new Error(data.message || data.error || "등록 실패");
+            return data;
+          });
+        })
+        .then(function (data) {
+          showAlert(addAlert, data.message || "등록되었습니다.", false);
+          if (addInput) addInput.value = "";
+          if (data.row) prependRow(data.row);
+        })
+        .catch(function (err) {
+          showAlert(addAlert, err.message || String(err), true);
+        })
+        .finally(function () {
+          if (submitBtn) submitBtn.disabled = false;
+        });
+    });
+  }
+})();
+</script>
+</body>
+</html>

@@ -30,6 +30,7 @@ _rows_cache_at: float = 0.0
 _CACHE_TTL_SEC = 300.0
 _PAGE_SIZE = 1000
 _SELECT = "business_number,company_name,disclosure_corp_code,stock_code"
+_SELECT_WITH_CREATED = f"{_SELECT},created_at"
 
 
 def _supabase_url() -> str:
@@ -86,21 +87,48 @@ def _rest_base() -> str:
     return f"{url}/rest/v1"
 
 
-def fetch_all_customer_rows(*, force_refresh: bool = False) -> list[dict[str, Any]]:
-    """customers 테이블 전체 (짧은 TTL 메모리 캐시)."""
+def is_missing_disclosure_code(raw: str | None) -> bool:
+    cc = normalize_disclosure_corp_code(raw or "")
+    return len(cc) != 8
+
+
+def is_biz_number_only_row(row: dict[str, Any]) -> bool:
+    """사업자번호만 있고 업체명·공시·종목이 비어 있는 행."""
+    biz = normalize_biz_number(str(row.get("business_number") or ""))
+    if len(biz) != 10:
+        return False
+    if is_missing_disclosure_code(str(row.get("disclosure_corp_code") or "")):
+        pass
+    else:
+        return False
+    name = (str(row.get("company_name") or "")).strip()
+    stock = (str(row.get("stock_code") or "")).strip()
+    return not name and not stock
+
+
+def fetch_all_customer_rows(
+    *,
+    force_refresh: bool = False,
+    order: str = "business_number.asc",
+    select: str = _SELECT,
+) -> list[dict[str, Any]]:
+    """customers 테이블 전체 (짧은 TTL 메모리 캐시). order: PostgREST order 파라미터."""
     global _rows_cache, _rows_cache_at
-    if (
+    use_cache = (
         not force_refresh
+        and order == "business_number.asc"
+        and select == _SELECT
         and _rows_cache is not None
         and (time.time() - _rows_cache_at) < _CACHE_TTL_SEC
-    ):
+    )
+    if use_cache:
         return list(_rows_cache)
 
     if not is_configured():
         raise RuntimeError("SUPABASE_URL 및 SUPABASE_KEY(또는 SERVICE_ROLE)가 필요합니다.")
 
     endpoint = f"{_rest_base()}/customers"
-    params = {"select": _SELECT, "order": "business_number.asc"}
+    params = {"select": select, "order": order}
     out: list[dict[str, Any]] = []
     offset = 0
 
@@ -119,9 +147,126 @@ def fetch_all_customer_rows(*, force_refresh: bool = False) -> list[dict[str, An
             break
         offset += _PAGE_SIZE
 
-    _rows_cache = out
-    _rows_cache_at = time.time()
+    if order == "business_number.asc" and select == _SELECT:
+        _rows_cache = out
+        _rows_cache_at = time.time()
     return list(out)
+
+
+def _fetch_rows_ordered(order: str, *, force_refresh: bool = False) -> list[dict[str, Any]]:
+    try:
+        return fetch_all_customer_rows(
+            force_refresh=force_refresh,
+            order=order,
+            select=_SELECT_WITH_CREATED,
+        )
+    except RuntimeError as e:
+        msg = str(e)
+        if "created_at" in msg or "42703" in msg or "column" in msg.lower():
+            return fetch_all_customer_rows(
+                force_refresh=force_refresh,
+                order="business_number.desc",
+            )
+        raise
+
+
+def fetch_rows_biz_number_only(
+    *,
+    force_refresh: bool = False,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """사업자번호만 등록된 행 — 최신 등록(created_at) 우선."""
+    rows = _fetch_rows_ordered("created_at.desc", force_refresh=force_refresh)
+    pending = [r for r in rows if is_biz_number_only_row(r)]
+    if limit is not None and limit > 0:
+        return pending[:limit]
+    return pending
+
+
+def fetch_customer_by_business_number(
+    business_number: str,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, Any] | None:
+    """단일 사업자번호 행 조회."""
+    biz = normalize_biz_number(business_number)
+    if len(biz) != 10:
+        return None
+    if not is_configured():
+        raise RuntimeError("SUPABASE_URL 및 SUPABASE_KEY(또는 SERVICE_ROLE)가 필요합니다.")
+
+    endpoint = f"{_rest_base()}/customers"
+    for select in (_SELECT_WITH_CREATED, _SELECT):
+        params = {
+            "select": select,
+            "business_number": f"eq.{biz}",
+            "limit": "1",
+        }
+        r = _SESSION.get(endpoint, params=params, headers=_rest_headers(), timeout=60)
+        if r.status_code >= 400:
+            msg = (r.text or "")[:500]
+            if select == _SELECT_WITH_CREATED and (
+                "created_at" in msg or "42703" in msg or "column" in msg.lower()
+            ):
+                continue
+            raise RuntimeError(f"Supabase 조회 실패 HTTP {r.status_code}: {msg}")
+        batch = r.json()
+        if not isinstance(batch, list) or not batch:
+            return None
+        return dict(batch[0])
+    return None
+
+
+def _format_created_at_display(raw: Any) -> str:
+    if raw is None or raw == "":
+        return ""
+    try:
+        from datetime import datetime
+
+        s = str(raw).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return str(raw)[:19]
+
+
+def pending_row_display(row: dict[str, Any]) -> dict[str, Any]:
+    """업체정보 갱신 페이지·API용 표시 dict."""
+    biz = normalize_biz_number(str(row.get("business_number") or ""))
+    cc = normalize_disclosure_corp_code(str(row.get("disclosure_corp_code") or ""))
+    created = row.get("created_at")
+    return {
+        "business_number": biz,
+        "company_name": (str(row.get("company_name") or "")).strip(),
+        "disclosure_corp_code": cc,
+        "stock_code": (str(row.get("stock_code") or "")).strip(),
+        "created_at": created,
+        "created_at_display": _format_created_at_display(created),
+    }
+
+
+def insert_business_number_only(business_number: str) -> dict[str, Any]:
+    """사업자번호만 신규 등록(upsert). 기존에 업체정보가 있으면 거부."""
+    biz = normalize_biz_number(business_number)
+    if len(biz) != 10:
+        raise ValueError("사업자번호는 10자리 숫자여야 합니다.")
+
+    existing = fetch_customer_by_business_number(biz)
+    if existing:
+        if is_biz_number_only_row(existing):
+            return existing
+        raise ValueError(
+            f"이미 등록된 사업자번호입니다(업체명·공시번호 등이 있습니다): {biz}"
+        )
+
+    row = {
+        "business_number": biz,
+        "company_name": "",
+        "disclosure_corp_code": "",
+        "stock_code": "",
+    }
+    upsert_customer_rows([row])
+    return fetch_customer_by_business_number(biz, force_refresh=True) or row
 
 
 def db_row_to_customer(row: dict[str, Any]) -> dict[str, Any]:
@@ -145,11 +290,6 @@ def customers_as_analyze_dicts(rows: list[dict[str, Any]] | None = None) -> list
         if len(c["business_number"]) == 10:
             out.append(c)
     return out
-
-
-def is_missing_disclosure_code(raw: str | None) -> bool:
-    cc = normalize_disclosure_corp_code(raw or "")
-    return len(cc) != 8
 
 
 def fetch_rows_missing_disclosure(

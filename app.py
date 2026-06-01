@@ -651,6 +651,108 @@ def api_health():
     return jsonify(body)
 
 
+def _pending_rows_for_enrich_page(*, force_refresh: bool = True) -> list[dict[str, Any]]:
+    if not _supabase_ready():
+        return []
+    raw = supabase_customers.fetch_rows_biz_number_only(force_refresh=force_refresh)
+    return [supabase_customers.pending_row_display(r) for r in raw]
+
+
+@app.route("/customers/enrich", methods=["GET"])
+def customers_enrich_page():
+    """사업자번호만 등록된 customers — 행별 DART 갱신."""
+    if not _supabase_ready():
+        return (
+            render_template(
+                "customers_enrich.html",
+                pending_rows=[],
+                missing_disclosure_count=None,
+                error="Supabase 가 설정되지 않았습니다. SUPABASE_URL · SUPABASE_KEY 를 확인하세요.",
+            ),
+            503,
+        )
+    try:
+        missing = supabase_customers.count_missing_disclosure(force_refresh=True)
+        pending_rows = _pending_rows_for_enrich_page(force_refresh=True)
+    except Exception as e:
+        return (
+            render_template(
+                "customers_enrich.html",
+                pending_rows=[],
+                missing_disclosure_count=None,
+                error=str(e),
+            ),
+            500,
+        )
+    return render_template(
+        "customers_enrich.html",
+        pending_rows=pending_rows,
+        missing_disclosure_count=missing,
+        error=None,
+    )
+
+
+@app.route("/api/customers/add", methods=["POST"])
+def api_customers_add():
+    if not _supabase_ready():
+        return jsonify({"ok": False, "error": "supabase_not_configured", "message": "Supabase 미설정"}), 503
+    payload = request.get_json(force=True, silent=True) or {}
+    raw_biz = str(payload.get("business_number") or payload.get("biz") or "").strip()
+    try:
+        row = supabase_customers.insert_business_number_only(raw_biz)
+        display = supabase_customers.pending_row_display(row)
+        return jsonify(
+            {
+                "ok": True,
+                "message": f"사업자번호 {display['business_number']} 등록되었습니다.",
+                "row": display,
+            }
+        )
+    except ValueError as e:
+        return jsonify({"ok": False, "error": "validation", "message": str(e)}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": "server", "message": str(e)}), 500
+
+
+@app.route("/api/customers/enrich-one", methods=["POST"])
+def api_customers_enrich_one():
+    if not _supabase_ready():
+        return jsonify({"ok": False, "error": "supabase_not_configured", "message": "Supabase 미설정"}), 503
+    payload = request.get_json(force=True, silent=True) or {}
+    raw_biz = str(payload.get("business_number") or payload.get("biz") or "").strip()
+    biz = normalize_biz_number(raw_biz)
+    if len(biz) != 10:
+        return jsonify({"ok": False, "message": "사업자번호는 10자리 숫자여야 합니다."}), 400
+
+    from services.customer_enrichment import enrich_customer_from_dart
+
+    name = ""
+    try:
+        existing = supabase_customers.fetch_customer_by_business_number(biz)
+        if existing:
+            name = (str(existing.get("company_name") or "")).strip()
+    except Exception:
+        pass
+
+    outcome = enrich_customer_from_dart(biz, name)
+    if outcome.error:
+        status = 503 if outcome.fatal else 400
+        return jsonify({"ok": False, "message": outcome.error, "fatal": outcome.fatal}), status
+    if not outcome.row:
+        return jsonify({"ok": False, "message": "DART 조회 결과가 없습니다."}), 400
+
+    supabase_customers.upsert_customer_rows([outcome.row])
+    display = supabase_customers.pending_row_display(outcome.row)
+    corp = display.get("company_name") or biz
+    return jsonify(
+        {
+            "ok": True,
+            "message": f"{corp} — 업체명·공시번호·종목코드 갱신 완료",
+            "row": display,
+        }
+    )
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     results = []

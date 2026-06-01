@@ -14,15 +14,15 @@
       {% if supabase_configured or resend_ready %}
       <div class="hero-head-actions">
         {% if supabase_configured %}
-        <button type="button" class="btn-enrich" id="enrich-btn"
-          data-stream-url="{{ url_for('enrich_stream') }}"
-          data-label-default="업체정보갱신"
-          data-confirm-message="해당 데이터는 DART API를 통해 사업자등록번호로 공시번호 등을 업데이트합니다.&#10;&#10;시간이 오래 걸릴 수 있으니 수작업은 지양해 주시기 바랍니다."
+        <a href="{{ url_for('customers_enrich_page') }}" target="_blank" rel="noopener noreferrer"
+          class="btn-enrich" id="enrich-btn"
           {% if missing_disclosure_count is not none %}
-          title="공시번호 없음 {{ missing_disclosure_count }}건"
+          title="사업자번호만 등록·공시번호 없음 {{ missing_disclosure_count }}건 — 새 창에서 갱신"
+          {% else %}
+          title="사업자번호만 등록된 항목을 새 창에서 DART로 갱신"
           {% endif %}>
           업체정보갱신
-        </button>
+        </a>
         {% endif %}
         {% if resend_ready %}
         <button type="button" class="btn-email" id="email-btn"
@@ -285,6 +285,7 @@
   if (!btn) return;
 
   var url = btn.getAttribute("data-stream-url");
+  if (!url) return;
   var defaultLabel = btn.getAttribute("data-label-default") || btn.textContent || "업체정보갱신";
 
   var bar = document.getElementById("enrich-progress-bar");
