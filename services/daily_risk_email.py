@@ -67,12 +67,6 @@ def send_daily_risk_report(
     if not sorted_results:
         raise RuntimeError("분석 결과가 없어 이메일을 보낼 수 없습니다.")
 
-    from services.resend_client import resend_delivery_warning
-
-    preflight = resend_delivery_warning()
-    if preflight:
-        raise RuntimeError(preflight)
-
     html = build_email_html(sorted_results, prep_meta=prep_meta)
     out = send_html_email(subject=email_subject(), html=html)
     resend_body = out.get("resend") if isinstance(out.get("resend"), dict) else {}

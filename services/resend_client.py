@@ -110,26 +110,54 @@ def resend_configured() -> bool:
     return bool(get_resend_api_key() and _from_address() and _to_addresses())
 
 
+def _resend_signup_email() -> str:
+    """Resend 가입 이메일(선택). onboarding@ 테스트 발신 시 수신 허용 여부 판단용."""
+    raw = (
+        os.environ.get("RESEND_SIGNUP_EMAIL")
+        or os.environ.get("RESEND_ACCOUNT_EMAIL")
+        or ""
+    ).strip()
+    if not raw:
+        return ""
+    try:
+        return extract_email_address(raw)
+    except ValueError:
+        return ""
+
+
 def resend_delivery_warning() -> str | None:
     """
-    발송 전 설정 오류(실제 API 403 예방).
-    onboarding@resend.dev → 회사 메일 수신 불가 등.
+    health/API 안내용. 발송을 막지 않음.
+
+    Resend 규칙: 도메인 미인증 + onboarding@resend.dev 이면
+    **가입 시 등록한 이메일**로만 수신 가능. mplace@cj.net 이 가입 주소면 정상 조합.
     """
     if not resend_configured():
         return None
     sender = _from_address().lower()
     recipients = _to_addresses()
-    if "onboarding@resend.dev" in sender:
-        corp = [r for r in recipients if not r.lower().endswith("@resend.dev")]
-        if corp:
+    if "onboarding@resend.dev" not in sender:
+        return None
+
+    signup = _resend_signup_email()
+    if signup:
+        bad = [r for r in recipients if r.lower() != signup.lower()]
+        if bad:
             return (
-                "RESEND_FROM 이 onboarding@resend.dev(테스트 발신)인데 "
-                f"RESEND_TO 가 {', '.join(corp)} 입니다. "
-                "Resend 테스트 모드에서는 가입 시 등록한 이메일로만 발송됩니다. "
-                "resend.com/domains 에서 cj.net 등 도메인을 Verified 로 만든 뒤 "
-                "RESEND_FROM 을 해당 도메인 주소(예: mplace@cj.net)로 바꾸세요."
+                f"테스트 발신(onboarding@resend.dev)은 Resend 가입 이메일({signup})로만 "
+                f"보낼 수 있습니다. 현재 수신: {', '.join(recipients)}. "
+                "다른 주소로내려면 cj.net 도메인 Verified 후 RESEND_FROM 변경."
             )
-    return None
+        return None
+
+    # 가입 이메일 미설정: mplace@cj.net 이 가입 주소면 발송 가능 — 차단하지 않음
+    return (
+        "테스트 발신(onboarding@resend.dev) 사용 중. "
+        f"RESEND_TO={', '.join(recipients)} 가 Resend 가입 이메일이면 발송 가능합니다. "
+        "다른 수신자·403 오류 시 resend.com/domains 에서 cj.net 인증 후 "
+        "RESEND_FROM=mplace@cj.net 등으로 변경하세요. "
+        "(선택) RESEND_SIGNUP_EMAIL 에 가입 이메일을 넣으면 health 에서 수신 불일치만 경고합니다."
+    )
 
 
 def config_status() -> dict[str, Any]:
@@ -142,9 +170,16 @@ def config_status() -> dict[str, Any]:
         except ValueError as e:
             to_parse_error = str(e)
 
-    warning = None
-    if resend_configured():
-        warning = resend_delivery_warning()
+    warning = resend_delivery_warning() if resend_configured() else None
+    # warning 이 있어도 가입 이메일과 일치하면 발송 가능 — API 로 최종 판단
+    blocks_send = False
+    if warning and _resend_signup_email():
+        signup = _resend_signup_email()
+        try:
+            recips = parse_recipient_list(raw_to) if raw_to else []
+            blocks_send = any(r.lower() != signup.lower() for r in recips)
+        except ValueError:
+            blocks_send = True
 
     return {
         "resend_api_key_set": bool(get_resend_api_key()),
@@ -153,9 +188,11 @@ def config_status() -> dict[str, Any]:
         "resend_to_set": bool(raw_to),
         "resend_to_resolved": recipients,
         "resend_to_parse_error": to_parse_error,
+        "resend_signup_email": _resend_signup_email() or None,
         "resend_ready": resend_configured(),
         "resend_delivery_warning": warning,
-        "resend_can_deliver": resend_configured() and not warning,
+        "resend_blocks_send": blocks_send,
+        "resend_can_deliver": resend_configured() and not blocks_send,
     }
 
 

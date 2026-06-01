@@ -123,13 +123,6 @@ def _iter_risk_email_job_events() -> Iterator[dict[str, Any]]:
         }
         return
 
-    from services.resend_client import resend_delivery_warning
-
-    delivery_warn = resend_delivery_warning()
-    if delivery_warn:
-        yield {"type": "error", "message": delivery_warn}
-        return
-
     yield {"type": "info", "message": "시도 중… 분석 대상 고객 목록을 준비합니다."}
 
     customers, prep = prepare_customers_for_analysis("")

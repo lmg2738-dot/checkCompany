@@ -39,24 +39,22 @@ curl -sS "https://check-company.vercel.app/api/cron/daily-risk-email" \
 
 ## 메일이 안 왔을 때
 
-### 0. Resend 발신·수신 조합 (가장 흔함)
+### 0. Resend 발신·수신 조합
 
-`/api/health` → `resend.resend_delivery_warning` 확인.
+`/api/health` → `resend` 확인.
 
-현재 Production 예시 문제:
+**정상 조합 (많은 경우)**
 
-- `RESEND_FROM` = `onboarding@resend.dev` (테스트 발신)
-- `RESEND_TO` = `mplace@cj.net` (회사 메일)
+- `RESEND_FROM` = `onboarding@resend.dev`
+- `RESEND_TO` = `mplace@cj.net`
+- Resend **가입 이메일**이 `mplace@cj.net` 이면 → 테스트 발신으로도 **발송 가능**
 
-→ **Resend가 403으로 거부**하거나, Cron이 예전에는 `ok:true`만 보고 실패를 놓칠 수 있었습니다.
+**안 되는 경우**
 
-**해결 (택1)**
+- `RESEND_TO`가 가입 이메일이 **아닌** 다른 주소 → 403 (도메인 Verified 후 `RESEND_FROM` 변경)
+- 과거 앱 버전이 이 조합을 **잘못 차단**했을 수 있음 → 최신 배포 후 재시도
 
-1. **도메인 인증(운영)** — [resend.com/domains](https://resend.com/domains)에서 `cj.net` DNS Verified 후  
-   `RESEND_FROM=mplace@cj.net` (또는 인증된 발신 주소)
-2. **테스트** — `RESEND_TO`를 Resend **가입 이메일**로 두고 `onboarding@resend.dev` 로 발송 테스트
-
-환경 변수 변경 후 **Redeploy** 필수.
+선택: Vercel에 `RESEND_SIGNUP_EMAIL=mplace@cj.net` 설정 시 health 에서 수신 불일치만 경고.
 
 ### 1. Vercel Cron 로그
 
