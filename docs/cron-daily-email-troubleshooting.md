@@ -39,6 +39,25 @@ curl -sS "https://check-company.vercel.app/api/cron/daily-risk-email" \
 
 ## 메일이 안 왔을 때
 
+### 0. Resend 발신·수신 조합 (가장 흔함)
+
+`/api/health` → `resend.resend_delivery_warning` 확인.
+
+현재 Production 예시 문제:
+
+- `RESEND_FROM` = `onboarding@resend.dev` (테스트 발신)
+- `RESEND_TO` = `mplace@cj.net` (회사 메일)
+
+→ **Resend가 403으로 거부**하거나, Cron이 예전에는 `ok:true`만 보고 실패를 놓칠 수 있었습니다.
+
+**해결 (택1)**
+
+1. **도메인 인증(운영)** — [resend.com/domains](https://resend.com/domains)에서 `cj.net` DNS Verified 후  
+   `RESEND_FROM=mplace@cj.net` (또는 인증된 발신 주소)
+2. **테스트** — `RESEND_TO`를 Resend **가입 이메일**로 두고 `onboarding@resend.dev` 로 발송 테스트
+
+환경 변수 변경 후 **Redeploy** 필수.
+
 ### 1. Vercel Cron 로그
 
 1. [Vercel 프로젝트](https://vercel.com) → **Settings** → **Cron Jobs**

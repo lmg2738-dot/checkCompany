@@ -123,6 +123,13 @@ def _iter_risk_email_job_events() -> Iterator[dict[str, Any]]:
         }
         return
 
+    from services.resend_client import resend_delivery_warning
+
+    delivery_warn = resend_delivery_warning()
+    if delivery_warn:
+        yield {"type": "error", "message": delivery_warn}
+        return
+
     yield {"type": "info", "message": "시도 중… 분석 대상 고객 목록을 준비합니다."}
 
     customers, prep = prepare_customers_for_analysis("")
@@ -222,12 +229,26 @@ def _iter_risk_email_job_events() -> Iterator[dict[str, Any]]:
     }
 
     mail = send_daily_risk_report(sorted_rows, prep_meta=prep)
+    if mail.get("skipped"):
+        yield {
+            "type": "error",
+            "message": f"메일 발송 생략됨: {mail.get('reason', 'DAILY_EMAIL_ENABLED')}",
+        }
+        return
+    if mail.get("ok") is False:
+        yield {
+            "type": "error",
+            "message": mail.get("reason") or "메일 발송 실패",
+        }
+        return
+
     yield {
         "type": "done",
         "subject": email_subject(),
         "analyzed_count": len(results_payload),
         "emailed_top": min(10, len(sorted_rows)),
         "to": mail.get("to"),
+        "resend_email_id": mail.get("resend_email_id"),
         "message": "메일 발송이 완료되었습니다.",
     }
 

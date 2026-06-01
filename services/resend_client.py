@@ -110,6 +110,28 @@ def resend_configured() -> bool:
     return bool(get_resend_api_key() and _from_address() and _to_addresses())
 
 
+def resend_delivery_warning() -> str | None:
+    """
+    발송 전 설정 오류(실제 API 403 예방).
+    onboarding@resend.dev → 회사 메일 수신 불가 등.
+    """
+    if not resend_configured():
+        return None
+    sender = _from_address().lower()
+    recipients = _to_addresses()
+    if "onboarding@resend.dev" in sender:
+        corp = [r for r in recipients if not r.lower().endswith("@resend.dev")]
+        if corp:
+            return (
+                "RESEND_FROM 이 onboarding@resend.dev(테스트 발신)인데 "
+                f"RESEND_TO 가 {', '.join(corp)} 입니다. "
+                "Resend 테스트 모드에서는 가입 시 등록한 이메일로만 발송됩니다. "
+                "resend.com/domains 에서 cj.net 등 도메인을 Verified 로 만든 뒤 "
+                "RESEND_FROM 을 해당 도메인 주소(예: mplace@cj.net)로 바꾸세요."
+            )
+    return None
+
+
 def config_status() -> dict[str, Any]:
     raw_to = (os.environ.get("RESEND_TO") or "").strip()
     to_parse_error: str | None = None
@@ -120,6 +142,10 @@ def config_status() -> dict[str, Any]:
         except ValueError as e:
             to_parse_error = str(e)
 
+    warning = None
+    if resend_configured():
+        warning = resend_delivery_warning()
+
     return {
         "resend_api_key_set": bool(get_resend_api_key()),
         "resend_from_set": bool((os.environ.get("RESEND_FROM") or "").strip()),
@@ -128,6 +154,8 @@ def config_status() -> dict[str, Any]:
         "resend_to_resolved": recipients,
         "resend_to_parse_error": to_parse_error,
         "resend_ready": resend_configured(),
+        "resend_delivery_warning": warning,
+        "resend_can_deliver": resend_configured() and not warning,
     }
 
 
