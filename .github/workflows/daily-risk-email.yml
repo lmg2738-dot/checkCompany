@@ -19,12 +19,16 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
-          URL="${APP_URL%/}/jobs/daily-risk-email?run=1&format=json"
-          echo "GET $URL"
+          BASE="${APP_URL%/}"
           AUTH=()
           if [ -n "${CRON_SECRET:-}" ]; then
             AUTH=(-H "Authorization: Bearer ${CRON_SECRET}")
           fi
+          echo "GET ${BASE}/api/cron/daily-risk-email?ping=1"
+          curl -fsS "${AUTH[@]}" "${BASE}/api/cron/daily-risk-email?ping=1"
+          echo ""
+          URL="${BASE}/api/cron/daily-risk-email"
+          echo "GET $URL"
           curl -fsS "${AUTH[@]}" --max-time 600 -o /tmp/email-job.json "$URL"
           echo "--- response ---"
           cat /tmp/email-job.json

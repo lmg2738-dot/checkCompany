@@ -492,6 +492,9 @@ def _is_vercel_cron_invoke() -> bool:
         return True
     if _header_get("x-vercel-cron-schedule"):
         return True
+    ua = _header_get("User-Agent").lower()
+    if "vercel-cron" in ua:
+        return True
     return False
 
 
@@ -509,26 +512,35 @@ def _cron_query_secret_ok() -> bool:
     return bool(q and q == expected)
 
 
+def _cron_bearer_matches(auth_header: str, expected: str) -> bool:
+    auth = (auth_header or "").strip()
+    if not auth or not expected:
+        return False
+    if auth == expected:
+        return True
+    if auth == f"Bearer {expected}":
+        return True
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip() == expected
+    return False
+
+
 def _cron_auth_status() -> dict[str, Any]:
     expected = _cron_secret_value()
     auth = _header_get("Authorization")
-    bearer_ok = False
-    if expected and auth:
-        if auth == f"Bearer {expected}":
-            bearer_ok = True
-        elif auth.lower().startswith("bearer "):
-            bearer_ok = auth[7:].strip() == expected
-        elif auth == expected:
-            bearer_ok = True
+    bearer_ok = _cron_bearer_matches(auth, expected) if expected else False
     vercel_cron = _is_vercel_cron_invoke()
     query_ok = _cron_query_secret_ok()
+    # Vercel Cron: Authorization Bearer CRON_SECRET + x-vercel-cron / UA vercel-cron
+    authorized = (not expected) or bearer_ok or vercel_cron or query_ok
     return {
         "cron_secret_configured": bool(expected),
         "authorization_header_present": bool(auth),
         "bearer_matches": bearer_ok,
         "query_secret_matches": query_ok,
-        "vercel_cron_headers": vercel_cron,
-        "authorized": (not expected) or bearer_ok or vercel_cron or query_ok,
+        "vercel_cron_detected": vercel_cron,
+        "user_agent": _header_get("User-Agent")[:120],
+        "authorized": authorized,
     }
 
 
@@ -653,39 +665,107 @@ def cron_auth_check():
     return jsonify(_cron_auth_status())
 
 
-@app.route("/api/cron/daily-risk-email", methods=["GET", "POST"])
+def _cron_job_log_lines(events: list[dict[str, Any]], *, limit: int = 8) -> list[str]:
+    lines: list[str] = []
+    for ev in events:
+        et = ev.get("type")
+        if et == "progress" and ev.get("phase") == "analyzing":
+            lines.append(
+                f"분석 {ev.get('current')}/{ev.get('total')} "
+                f"({ev.get('pct')}%)"
+            )
+        elif ev.get("message"):
+            lines.append(f"[{et}] {ev['message']}")
+        elif et in ("error", "done"):
+            lines.append(str(ev))
+    return lines[-limit:]
+
+
+@app.route("/api/cron/daily-risk-email", methods=["GET", "POST", "HEAD"])
 def cron_daily_risk_email():
     """
-    매일 오전 10시(KST) Vercel Cron — 화면 메일발송과 동일(스트리밍).
+    매일 오전 10시(KST) Vercel Cron — 화면 메일발송과 동일(동기 JSON).
     01:00 UTC = 10:00~10:59 KST (Hobby는 해당 시각대 내 임의 시각).
+    ?ping=1 — 인증·경로 확인만 (작업 미실행).
     """
-    if not _cron_authorized():
+    if request.method == "HEAD":
+        return ("", 200) if _cron_authorized() else ("", 401)
+
+    auth_st = _cron_auth_status()
+    if not auth_st["authorized"]:
         return _cron_unauthorized_response()
 
-    schedule_hdr = (request.headers.get("x-vercel-cron-schedule") or "").strip()
-
-    def chunks() -> Iterator[bytes]:
-        print(
-            f"[cron] daily-risk-email start schedule={schedule_hdr or 'manual'}",
-            flush=True,
-        )
-        try:
-            for ev in _iter_risk_email_job_events():
-                et = ev.get("type")
-                if et in ("info", "error", "done"):
-                    print(f"[cron] {et}: {ev.get('message', ev)}", flush=True)
-                yield _ndjson_line(ev)
-                if et == "error":
-                    return
-        except Exception as e:
-            print(f"[cron] fatal: {e}", flush=True)
-            yield _ndjson_line({"type": "error", "message": str(e)})
-
-    return Response(
-        stream_with_context(chunks()),
-        mimetype="application/x-ndjson; charset=utf-8",
-        headers=_ndjson_stream_headers(),
+    schedule_hdr = _header_get("x-vercel-cron-schedule")
+    ping_only = (request.args.get("ping") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
     )
+    if ping_only:
+        return jsonify(
+            {
+                "ok": True,
+                "ping": True,
+                "path": "/api/cron/daily-risk-email",
+                "schedule": schedule_hdr or None,
+                "auth_check": auth_st,
+                "note": "Vercel Cron 경로·인증 정상. ?ping 없이 호출 시 메일 작업 실행.",
+            }
+        )
+
+    kst = timezone(timedelta(hours=9))
+    started_at = datetime.now(kst).isoformat(timespec="seconds")
+    print(
+        f"[cron] daily-risk-email START schedule={schedule_hdr or 'manual'} "
+        f"vercel_cron={auth_st.get('vercel_cron_detected')}",
+        flush=True,
+    )
+    t0 = time.perf_counter()
+    try:
+        collected = collect_risk_email_job_events()
+    except Exception as e:
+        print(f"[cron] daily-risk-email FATAL {e}", flush=True)
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(e),
+                    "schedule": schedule_hdr or None,
+                    "started_at": started_at,
+                    "elapsed_sec": round(time.perf_counter() - t0, 1),
+                }
+            ),
+            500,
+        )
+
+    elapsed = round(time.perf_counter() - t0, 1)
+    events = collected.get("events") or []
+    for line in _cron_job_log_lines(events):
+        print(f"[cron] {line}", flush=True)
+
+    body: dict[str, Any] = {
+        "ok": collected["ok"],
+        "schedule": schedule_hdr or None,
+        "started_at": started_at,
+        "finished_at": datetime.now(kst).isoformat(timespec="seconds"),
+        "elapsed_sec": elapsed,
+        "auth_check": {
+            "vercel_cron_detected": auth_st.get("vercel_cron_detected"),
+            "bearer_matches": auth_st.get("bearer_matches"),
+        },
+        "log_tail": _cron_job_log_lines(events),
+    }
+    if collected.get("result"):
+        body["result"] = collected["result"]
+    if collected.get("error"):
+        body["error"] = collected["error"]
+
+    status = 200 if collected["ok"] else 500
+    print(
+        f"[cron] daily-risk-email END ok={collected['ok']} elapsed={elapsed}s",
+        flush=True,
+    )
+    return jsonify(body), status
 
 
 @app.route("/api/send-risk-email_stream", methods=["POST"])
@@ -771,13 +851,16 @@ def api_health():
 
     body["cron"] = {
         "daily_risk_email_path": "/api/cron/daily-risk-email",
+        "daily_risk_email_ping": "/api/cron/daily-risk-email?ping=1",
         "make_daily_email_page": "/jobs/daily-risk-email",
         "make_trigger_url": "/jobs/daily-risk-email?run=1&format=json",
         "vercel_schedule_utc": "0 1 * * *",
         "kst_window": "10:00~10:59 (Hobby는 해당 시각대 내 임의 실행)",
         "cron_secret_set": bool((os.environ.get("CRON_SECRET") or "").strip()),
         "function_max_duration_sec": 300,
-        "note": "Vercel Cron 불안정 시 Make로 /jobs/daily-risk-email 호출",
+        "fluid_compute": True,
+        "response_format": "application/json (동기, NDJSON 아님)",
+        "note": "Cron 로그에서 ok:false·504 확인. ping으로 인증만 테스트.",
     }
 
     return jsonify(body)
