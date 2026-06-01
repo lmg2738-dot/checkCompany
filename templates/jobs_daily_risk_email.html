@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>일일 위험 리포트 메일 · 작업</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <style>
+    .job-page { max-width: 720px; margin: 0 auto; padding: 1.25rem 1.5rem 2.5rem; }
+    .job-log { margin: 1rem 0 0; padding: 0; list-style: none; font-size: 0.9rem; }
+    .job-log li { padding: 0.35rem 0; border-bottom: 1px solid var(--border); }
+    .job-log li:last-child { border-bottom: none; }
+    .job-log .ev-error { color: var(--high); font-weight: 600; }
+    .job-log .ev-done { color: #0b6e4f; font-weight: 600; }
+    .job-code {
+      display: block;
+      margin: 0.5rem 0 1rem;
+      padding: 0.75rem 1rem;
+      background: #f0f3f9;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.82rem;
+      word-break: break-all;
+      font-family: ui-monospace, Consolas, monospace;
+    }
+    .job-status-ok { color: #0b6e4f; font-weight: 700; }
+    .job-status-fail { color: var(--high); font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main class="job-page">
+    <header class="hero panel sheet">
+      <h1>일일 위험 리포트 메일</h1>
+      <p class="sub">
+        화면 <strong>메일발송</strong> 버튼과 동일하게 전체 고객을 분석한 뒤
+        위험 상위 10건 리포트를 Resend로 발송합니다.
+      </p>
+    </header>
+
+    {% if page_mode == "info" %}
+    <section class="panel sheet">
+      <h2>Make(Integromat) 스케줄 설정</h2>
+      <p class="muted">매일 <strong>오전 10시(한국시간)</strong>에 아래 URL을 호출하세요.</p>
+      <p><strong>호출 URL (권장 · JSON)</strong></p>
+      <code class="job-code">{{ run_json_url }}</code>
+      <p><strong>HTTP 메서드</strong> GET 또는 POST</p>
+      <p><strong>헤더</strong> (Vercel <code>CRON_SECRET</code> 과 동일한 값)</p>
+      <code class="job-code">Authorization: Bearer &lt;CRON_SECRET&gt;</code>
+      <p class="muted">
+        Vercel Cron이 불안정할 때 Make로 이 URL을 대신 호출하면 됩니다.
+        작업은 최대 약 5분 걸릴 수 있습니다.
+      </p>
+      <p><strong>HTML 결과 페이지</strong> (브라우저·로그 확인용)</p>
+      <code class="job-code">{{ run_html_url }}</code>
+      {% if not cron_secret_set %}
+      <div class="alert alert-error" role="alert">
+        Vercel에 <code>CRON_SECRET</code> 이 설정되어 있지 않습니다. Production 환경 변수를 추가한 뒤 재배포하세요.
+      </div>
+      {% endif %}
+      <p class="muted">
+        <a href="{{ url_for('index') }}">← 리포트 메인</a>
+        · <a href="{{ url_for('api_health') }}">/api/health</a>
+      </p>
+    </section>
+    {% elif page_mode == "error" %}
+    <section class="panel sheet">
+      <p class="job-status-fail">인증 실패 (401)</p>
+      <p>{{ error_message }}</p>
+      <code class="job-code">{{ run_json_url }}</code>
+      <p class="muted">헤더 <code>Authorization: Bearer CRON_SECRET</code> 을 넣었는지 확인하세요.</p>
+    </section>
+    {% else %}
+    <section class="panel sheet">
+      {% if ok %}
+      <p class="job-status-ok">메일 발송 완료</p>
+      {% if result %}
+      <p>제목: <strong>{{ result.subject }}</strong></p>
+      <p class="muted">
+        분석 {{ result.analyzed_count }}건 · 메일 상위 {{ result.emailed_top }}건
+        {% if result.to %} · 수신 {{ result.to }}{% endif %}
+      </p>
+      {% endif %}
+      {% else %}
+      <p class="job-status-fail">작업 실패</p>
+      <p>{{ error_message }}</p>
+      {% endif %}
+      <p class="muted">시작 {{ started_at }} · 종료 {{ finished_at }} ({{ elapsed_sec }}초)</p>
+      <h2>실행 로그</h2>
+      <ul class="job-log">
+        {% for ev in events %}
+        <li class="ev-{{ ev.type }}">
+          [{{ ev.type }}]
+          {% if ev.message %}{{ ev.message }}
+          {% elif ev.phase %}{{ ev.phase }} {{ ev.current }}/{{ ev.total }}
+          {% else %}{{ ev }}{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+  </main>
+</body>
+</html>

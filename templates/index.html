@@ -15,7 +15,7 @@
       <div class="hero-head-actions">
         {% if supabase_configured %}
         <a href="{{ url_for('customers_enrich_page') }}" target="_blank" rel="noopener noreferrer"
-          class="btn-enrich" id="enrich-btn"
+          class="btn-email" id="enrich-btn"
           {% if missing_disclosure_count is not none %}
           title="사업자번호만 등록·공시번호 없음 {{ missing_disclosure_count }}건 — 새 창에서 갱신"
           {% else %}
@@ -458,7 +458,10 @@
     btn.getAttribute("data-confirm-message")
     || "해당 데이터는 DART API를 통해 사업자등록번호로 공시번호 등을 업데이트합니다.\n\n시간이 오래 걸릴 수 있으니 수작업은 지양해 주시기 바랍니다.";
 
-  btn.addEventListener("click", function () {
+  btn.addEventListener("click", function (ev) {
+    if (!url) return;
+
+    ev.preventDefault();
     if (!window.confirm(confirmMessage)) {
       return;
     }

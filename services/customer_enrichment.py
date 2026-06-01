@@ -226,10 +226,23 @@ def iter_disclosure_refresh_events(
         if outcome.row:
             matched += 1
             buffer.append(outcome.row)
+            display_row = {**raw, **outcome.row}
+            yield {
+                "type": "item",
+                "business_number": biz,
+                "ok": True,
+                "row": display_row,
+            }
             if len(buffer) >= upsert_batch_size:
                 flush_buffer()
         else:
             failed_count += 1
+            yield {
+                "type": "item",
+                "business_number": biz,
+                "ok": False,
+                "error": outcome.error or "DART 매칭 실패",
+            }
 
         elapsed = time.perf_counter() - t0
         cur = i + 1

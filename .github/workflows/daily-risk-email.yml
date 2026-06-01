@@ -19,27 +19,14 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
-          URL="${APP_URL%/}/api/send-risk-email_stream"
-          echo "POST $URL"
+          URL="${APP_URL%/}/jobs/daily-risk-email?run=1&format=json"
+          echo "GET $URL"
           AUTH=()
           if [ -n "${CRON_SECRET:-}" ]; then
             AUTH=(-H "Authorization: Bearer ${CRON_SECRET}")
           fi
-          curl -fsS -X POST "${AUTH[@]}" \
-            -H "Content-Type: application/json" \
-            -H "Accept: application/x-ndjson" \
-            --max-time 600 \
-            -d '{}' \
-            -o /tmp/email-stream.ndjson \
-            "$URL"
-          echo "--- last events ---"
-          tail -n 5 /tmp/email-stream.ndjson
-          if grep -q '"type": "error"' /tmp/email-stream.ndjson; then
-            echo "Email job reported error"
-            exit 1
-          fi
-          if ! grep -q '"type": "done"' /tmp/email-stream.ndjson; then
-            echo "Email job did not complete"
-            exit 1
-          fi
+          curl -fsS "${AUTH[@]}" --max-time 600 -o /tmp/email-job.json "$URL"
+          echo "--- response ---"
+          cat /tmp/email-job.json
+          python3 -c "import json,sys; d=json.load(open('/tmp/email-job.json')); sys.exit(0 if d.get('ok') else 1)"
           echo "OK"

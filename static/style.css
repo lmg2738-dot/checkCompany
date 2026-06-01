@@ -806,7 +806,25 @@ span.abbr-hint {
   padding: 1.5rem !important;
 }
 
-a.btn-enrich {
+.enrich-list-head {
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+}
+
+.enrich-list-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  margin-left: auto;
+}
+
+.customers-enrich-page .enrich-progress-panel {
+  margin-top: 1rem;
+}
+
+a.btn-enrich,
+a.btn-email {
   text-decoration: none;
   box-sizing: border-box;
 }

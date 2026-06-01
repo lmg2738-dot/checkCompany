@@ -8,6 +8,7 @@ import io
 import json as json_std
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Iterator
@@ -233,15 +234,43 @@ def _iter_risk_email_job_events() -> Iterator[dict[str, Any]]:
 
 def run_daily_risk_email_job() -> dict[str, Any]:
     """동기 실행(스크립트·테스트용)."""
-    last_done: dict[str, Any] | None = None
+    collected = collect_risk_email_job_events()
+    if not collected["ok"]:
+        raise RuntimeError(collected.get("error") or "이메일 발송 실패")
+    return {"ok": True, **(collected.get("result") or {})}
+
+
+def collect_risk_email_job_events() -> dict[str, Any]:
+    """메일발송·Make·동기 Cron 공통 — 이벤트 수집."""
+    events: list[dict[str, Any]] = []
     for ev in _iter_risk_email_job_events():
-        if ev.get("type") == "error":
-            raise RuntimeError(str(ev.get("message") or "이메일 발송 실패"))
-        if ev.get("type") == "done":
-            last_done = ev
-    if not last_done:
-        raise RuntimeError("이메일 작업이 완료되지 않았습니다.")
-    return {"ok": True, **last_done}
+        events.append(ev)
+        if ev.get("type") in ("error", "done"):
+            break
+    last = events[-1] if events else {}
+    if last.get("type") == "done":
+        return {"ok": True, "events": events, "result": last}
+    if last.get("type") == "error":
+        return {
+            "ok": False,
+            "events": events,
+            "error": str(last.get("message") or "이메일 발송 실패"),
+        }
+    return {"ok": False, "events": events, "error": "이메일 작업이 완료되지 않았습니다."}
+
+
+def _jobs_daily_email_urls() -> dict[str, str]:
+    base = (os.environ.get("DASHBOARD_URL") or request.url_root or "").strip()
+    if not base.endswith("/"):
+        base += "/"
+    path = "jobs/daily-risk-email"
+    run_json = f"{base}{path}?run=1&format=json"
+    run_html = f"{base}{path}?run=1"
+    return {
+        "info_url": f"{base}{path}",
+        "run_json_url": run_json,
+        "run_html_url": run_html,
+    }
 
 
 def csv_preview_fragment(csv_text: str) -> str:
@@ -466,6 +495,20 @@ def _is_vercel_cron_invoke() -> bool:
     return False
 
 
+def _cron_query_secret_ok() -> bool:
+    """Make 등 URL 쿼리 ?key= (권장은 Authorization 헤더)."""
+    expected = _cron_secret_value()
+    if not expected:
+        return False
+    q = (
+        request.args.get("key")
+        or request.args.get("cron_secret")
+        or request.args.get("secret")
+        or ""
+    ).strip()
+    return bool(q and q == expected)
+
+
 def _cron_auth_status() -> dict[str, Any]:
     expected = _cron_secret_value()
     auth = _header_get("Authorization")
@@ -478,12 +521,14 @@ def _cron_auth_status() -> dict[str, Any]:
         elif auth == expected:
             bearer_ok = True
     vercel_cron = _is_vercel_cron_invoke()
+    query_ok = _cron_query_secret_ok()
     return {
         "cron_secret_configured": bool(expected),
         "authorization_header_present": bool(auth),
         "bearer_matches": bearer_ok,
+        "query_secret_matches": query_ok,
         "vercel_cron_headers": vercel_cron,
-        "authorized": (not expected) or bearer_ok or vercel_cron,
+        "authorized": (not expected) or bearer_ok or vercel_cron or query_ok,
     }
 
 
@@ -514,6 +559,91 @@ def _cron_unauthorized_response() -> tuple[Any, int]:
             }
         ),
         401,
+    )
+
+
+@app.route("/jobs/daily-risk-email", methods=["GET", "POST"])
+def jobs_daily_risk_email():
+    """
+    Make·수동 호출용 — 화면 「메일발송」과 동일.
+    GET ?run=1 + Authorization: Bearer CRON_SECRET
+    JSON: &format=json
+    """
+    urls = _jobs_daily_email_urls()
+    run_requested = (
+        (request.args.get("run") or "").strip() in ("1", "true", "yes")
+        or (request.values.get("run") or "").strip() in ("1", "true", "yes")
+        or request.method == "POST"
+    )
+    wants_json = (request.args.get("format") or "").strip().lower() == "json"
+
+    if not run_requested:
+        return render_template(
+            "jobs_daily_risk_email.html",
+            page_mode="info",
+            cron_secret_set=bool(_cron_secret_value()),
+            **urls,
+        )
+
+    if not _cron_authorized():
+        hint = (
+            "Authorization: Bearer <CRON_SECRET> 헤더가 필요합니다. "
+            "Vercel Production 의 CRON_SECRET 과 동일하게 설정하세요."
+        )
+        if wants_json:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "unauthorized",
+                    "hint": hint,
+                    "auth_check": _cron_auth_status(),
+                    **urls,
+                }
+            ), 401
+        return (
+            render_template(
+                "jobs_daily_risk_email.html",
+                page_mode="error",
+                error_message=hint,
+                cron_secret_set=bool(_cron_secret_value()),
+                **urls,
+            ),
+            401,
+        )
+
+    kst = timezone(timedelta(hours=9))
+    t0 = time.perf_counter()
+    started = datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S KST")
+    collected = collect_risk_email_job_events()
+    elapsed = round(time.perf_counter() - t0, 1)
+    finished = datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S KST")
+
+    if wants_json:
+        body: dict[str, Any] = {
+            "ok": collected["ok"],
+            "elapsed_sec": elapsed,
+            "finished_at": finished,
+            "events": collected.get("events") or [],
+            **urls,
+        }
+        if collected.get("result"):
+            body["result"] = collected["result"]
+        if collected.get("error"):
+            body["error"] = collected["error"]
+        return jsonify(body), 200 if collected["ok"] else 500
+
+    return render_template(
+        "jobs_daily_risk_email.html",
+        page_mode="result",
+        ok=collected["ok"],
+        events=collected.get("events") or [],
+        result=collected.get("result"),
+        error_message=collected.get("error"),
+        started_at=started,
+        finished_at=finished,
+        elapsed_sec=elapsed,
+        cron_secret_set=bool(_cron_secret_value()),
+        **urls,
     )
 
 
@@ -641,11 +771,13 @@ def api_health():
 
     body["cron"] = {
         "daily_risk_email_path": "/api/cron/daily-risk-email",
+        "make_daily_email_page": "/jobs/daily-risk-email",
+        "make_trigger_url": "/jobs/daily-risk-email?run=1&format=json",
         "vercel_schedule_utc": "0 1 * * *",
         "kst_window": "10:00~10:59 (Hobby는 해당 시각대 내 임의 실행)",
         "cron_secret_set": bool((os.environ.get("CRON_SECRET") or "").strip()),
         "function_max_duration_sec": 300,
-        "note": "Vercel 대시보드 → Cron Jobs → View Logs 에서 401/504 확인",
+        "note": "Vercel Cron 불안정 시 Make로 /jobs/daily-risk-email 호출",
     }
 
     return jsonify(body)
@@ -708,6 +840,10 @@ def api_customers_add():
                 "row": display,
             }
         )
+    except supabase_customers.DuplicateBusinessNumberError as e:
+        return jsonify(
+            {"ok": False, "error": "duplicate_business_number", "message": str(e)}
+        ), 409
     except ValueError as e:
         return jsonify({"ok": False, "error": "validation", "message": str(e)}), 400
     except Exception as e:
@@ -750,6 +886,68 @@ def api_customers_enrich_one():
             "message": f"{corp} — 업체명·공시번호·종목코드 갱신 완료",
             "row": display,
         }
+    )
+
+
+@app.route("/api/customers/enrich-pending-stream", methods=["POST"])
+def api_customers_enrich_pending_stream():
+    """NDJSON — 사업자번호만 등록된 customers 행을 DART로 일괄 보강."""
+
+    def chunks() -> Iterator[bytes]:
+        try:
+            yield _ndjson_line(
+                {
+                    "type": "progress",
+                    "phase": "connecting",
+                    "current": 0,
+                    "total": 0,
+                    "fraction": 0,
+                    "pct": 0,
+                    "elapsed_sec": 0,
+                    "eta_sec": None,
+                    "message": "서버에 연결합니다…",
+                }
+            )
+
+            if not _supabase_ready():
+                yield _ndjson_line(
+                    {"type": "error", "message": "Supabase 가 설정되지 않았습니다."}
+                )
+                return
+
+            from services.customer_enrichment import iter_disclosure_refresh_events
+
+            yield _ndjson_line(
+                {"type": "info", "message": "갱신 대기 목록을 불러옵니다…"}
+            )
+
+            pending = supabase_customers.fetch_rows_biz_number_only(force_refresh=True)
+            if not pending:
+                yield _ndjson_line(
+                    {
+                        "type": "error",
+                        "message": "갱신할 사업자번호가 없습니다.",
+                    }
+                )
+                return
+
+            for ev in iter_disclosure_refresh_events(pending, max_items=None):
+                if ev.get("type") == "item" and ev.get("ok") and ev.get("row"):
+                    ev = {
+                        **ev,
+                        "row": supabase_customers.pending_row_display(ev["row"]),
+                    }
+                elif ev.get("type") == "done":
+                    supabase_customers.invalidate_customer_cache()
+                yield _ndjson_line(ev)
+
+        except Exception as e:
+            yield _ndjson_line({"type": "error", "message": str(e)})
+
+    return Response(
+        stream_with_context(chunks()),
+        mimetype="application/x-ndjson; charset=utf-8",
+        headers=_ndjson_stream_headers(),
     )
 
 

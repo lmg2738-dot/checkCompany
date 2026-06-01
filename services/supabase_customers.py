@@ -245,19 +245,19 @@ def pending_row_display(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class DuplicateBusinessNumberError(ValueError):
+    """동일 사업자번호가 customers에 이미 있음."""
+
+
 def insert_business_number_only(business_number: str) -> dict[str, Any]:
-    """사업자번호만 신규 등록(upsert). 기존에 업체정보가 있으면 거부."""
+    """사업자번호만 신규 등록. 동일 번호가 있으면 등록하지 않음."""
     biz = normalize_biz_number(business_number)
     if len(biz) != 10:
         raise ValueError("사업자번호는 10자리 숫자여야 합니다.")
 
     existing = fetch_customer_by_business_number(biz)
     if existing:
-        if is_biz_number_only_row(existing):
-            return existing
-        raise ValueError(
-            f"이미 등록된 사업자번호입니다(업체명·공시번호 등이 있습니다): {biz}"
-        )
+        raise DuplicateBusinessNumberError("이미 등록된 사업자번호입니다.")
 
     row = {
         "business_number": biz,

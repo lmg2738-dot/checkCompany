@@ -28,6 +28,13 @@
       {% if error %}
       <div class="alert alert-error" role="alert">{{ error }}</div>
       {% endif %}
+      <div class="analyze-progress-panel enrich-progress-panel" id="batch-progress-panel" hidden aria-hidden="true">
+        <div class="analyze-progress-label" id="batch-progress-label" aria-live="polite">일괄 갱신 준비 중…</div>
+        <div class="analyze-progress-bar-wrap">
+          <div class="analyze-progress-bar enrich-progress-bar" id="batch-progress-bar"></div>
+        </div>
+        <div class="analyze-progress-meta muted" id="batch-progress-meta"></div>
+      </div>
     </header>
 
     <section class="panel sheet">
@@ -44,9 +51,17 @@
     </section>
 
     <section class="panel sheet">
-      <div class="csv-preview-head">
+      <div class="csv-preview-head enrich-list-head">
         <h2 class="enrich-table-title">갱신 대기 목록</h2>
-        <span class="csv-preview-note">전체 : {{ pending_rows|length }}건</span>
+        <div class="enrich-list-head-actions">
+          <span class="csv-preview-note">전체 : <span id="pending-count">{{ pending_rows|length }}</span>건</span>
+          <button type="button" class="btn-email" id="batch-enrich-btn"
+            data-stream-url="{{ url_for('api_customers_enrich_pending_stream') }}"
+            {% if not pending_rows %}disabled{% endif %}
+            title="목록의 모든 사업자번호를 DART로 조회해 갱신합니다">
+            일괄갱신하기
+          </button>
+        </div>
       </div>
       <div id="page-alert" class="alert" hidden role="alert"></div>
       <div class="table-wrap">
@@ -105,6 +120,15 @@
     el.textContent = "";
   }
 
+  function normalizeBizInput(raw) {
+    return String(raw || "").replace(/\D/g, "").slice(0, 10);
+  }
+
+  function isBizInPendingTable(biz) {
+    if (!tbody || !biz) return false;
+    return !!tbody.querySelector('tr[data-biz="' + biz + '"]');
+  }
+
   function escapeHtml(s) {
     return String(s || "")
       .replace(/&/g, "&amp;")
@@ -145,6 +169,19 @@
     bindRowButtons(tr);
   }
 
+  function updatePendingCount() {
+    var el = document.getElementById("pending-count");
+    if (!el || !tbody) return;
+    el.textContent = String(tbody.querySelectorAll("tr[data-biz]").length);
+  }
+
+  function setBatchButtonEnabled() {
+    var batchBtn = document.getElementById("batch-enrich-btn");
+    if (!batchBtn) return;
+    var n = tbody ? tbody.querySelectorAll("tr[data-biz]").length : 0;
+    batchBtn.disabled = n === 0;
+  }
+
   function updateRowFromResult(biz, data) {
     var tr = tbody.querySelector('tr[data-biz="' + biz + '"]');
     if (!tr) return;
@@ -154,6 +191,8 @@
       tr.querySelector(".col-stock").textContent = data.row.stock_code || "—";
       if (data.row.disclosure_corp_code && data.row.disclosure_corp_code.length === 8) {
         tr.remove();
+        updatePendingCount();
+        setBatchButtonEnabled();
       }
     }
   }
@@ -203,22 +242,248 @@
   }
 
   bindRowButtons(document);
+  setBatchButtonEnabled();
+
+  (function initBatchEnrich() {
+    var batchBtn = document.getElementById("batch-enrich-btn");
+    if (!batchBtn) return;
+    var streamUrl = batchBtn.getAttribute("data-stream-url");
+    if (!streamUrl) return;
+
+    var panel = document.getElementById("batch-progress-panel");
+    var bar = document.getElementById("batch-progress-bar");
+    var lbl = document.getElementById("batch-progress-label");
+    var meta = document.getElementById("batch-progress-meta");
+    var defaultLabel = batchBtn.textContent || "일괄갱신하기";
+
+    function supportsStreamFetch() {
+      return typeof Response !== "undefined"
+        && typeof ReadableStream !== "undefined"
+        && typeof fetch === "function";
+    }
+
+    function fmtEtaSeconds(sec) {
+      var x = Math.max(0, Math.ceil(Number(sec) || 0));
+      if (x < 60) return "약 " + x + "초";
+      var m = Math.floor(x / 60);
+      var s = x % 60;
+      return "약 " + m + "분 " + s + "초";
+    }
+
+    function showPanel() {
+      if (!panel) return;
+      panel.removeAttribute("hidden");
+      panel.classList.add("is-visible");
+      panel.setAttribute("aria-hidden", "false");
+    }
+
+    function hidePanelLater() {
+      window.setTimeout(function () {
+        if (!panel) return;
+        panel.setAttribute("hidden", "");
+        panel.classList.remove("is-visible");
+        panel.setAttribute("aria-hidden", "true");
+      }, 2500);
+    }
+
+    function setIndeterminate(on) {
+      if (!bar) return;
+      if (on) {
+        bar.classList.add("is-indeterminate");
+        bar.style.width = "38%";
+      } else {
+        bar.classList.remove("is-indeterminate");
+      }
+    }
+
+    function setBatchBusy(on) {
+      batchBtn.disabled = !!on || !tbody.querySelectorAll("tr[data-biz]").length;
+      if (on) {
+        batchBtn.classList.add("is-busy");
+        batchBtn.textContent = "갱신 중…";
+      } else {
+        batchBtn.classList.remove("is-busy");
+        batchBtn.textContent = defaultLabel;
+        setBatchButtonEnabled();
+      }
+      tbody.querySelectorAll(".btn-row-enrich").forEach(function (b) {
+        b.disabled = !!on;
+      });
+      if (addForm) addForm.querySelectorAll("button, input").forEach(function (el) {
+        el.disabled = !!on;
+      });
+    }
+
+    function handleStreamEvent(data) {
+      if (data.type === "info") {
+        setIndeterminate(true);
+        if (lbl) lbl.textContent = data.message || "준비 중…";
+        return;
+      }
+      if (data.type === "progress") {
+        if (data.phase === "connecting" || !data.total) {
+          setIndeterminate(true);
+          if (lbl) lbl.textContent = data.message || "연결 중…";
+          return;
+        }
+        setIndeterminate(false);
+        var fracPct = typeof data.fraction === "number"
+          ? data.fraction * 100
+          : (data.pct != null ? Number(data.pct) : 0);
+        if (bar) bar.style.width = Math.min(100, Math.max(0, fracPct)).toFixed(1) + "%";
+        var cur = data.current != null ? data.current : "?";
+        var tot = data.total != null ? data.total : "?";
+        if (lbl) lbl.textContent = "DART 조회: " + cur + " / " + tot + "건";
+        if (meta) {
+          var parts = [];
+          parts.push("경과 " + (data.elapsed_sec != null ? data.elapsed_sec : "0") + "초");
+          if (data.matched != null) parts.push("매칭 " + data.matched + "건");
+          if (data.failed != null) parts.push("실패 " + data.failed + "건");
+          if (data.eta_sec != null && data.eta_sec >= 0) {
+            parts.push("예상 남은 시간 " + fmtEtaSeconds(data.eta_sec));
+          }
+          meta.textContent = parts.join(" · ");
+        }
+        return;
+      }
+      if (data.type === "item") {
+        var biz = data.business_number;
+        if (data.ok && data.row) {
+          updateRowFromResult(biz, { ok: true, row: data.row });
+        }
+        return;
+      }
+      if (data.type === "error") {
+        setIndeterminate(false);
+        showAlert(pageAlert, data.message || "일괄 갱신이 중단되었습니다.", true);
+        if (lbl) lbl.textContent = "갱신 중단";
+        return "stop";
+      }
+      if (data.type === "done") {
+        setIndeterminate(false);
+        if (bar) bar.style.width = "100%";
+        var summary = "일괄 갱신 완료";
+        if (data.matched != null) summary += " · 매칭 " + data.matched + "건";
+        if (data.failed_count != null && data.failed_count > 0) {
+          summary += " · 실패 " + data.failed_count + "건";
+        }
+        if (lbl) lbl.textContent = summary;
+        if (meta) meta.textContent = "";
+        showAlert(pageAlert, summary, false);
+        hidePanelLater();
+        return "stop";
+      }
+    }
+
+    batchBtn.addEventListener("click", function () {
+      hideAlert(pageAlert);
+      var n = tbody.querySelectorAll("tr[data-biz]").length;
+      if (!n) {
+        window.alert("갱신할 사업자번호가 없습니다.");
+        return;
+      }
+      if (
+        !window.confirm(
+          "목록의 사업자번호 " + n + "건을 DART로 조회해 일괄 갱신합니다.\n\n시간이 걸릴 수 있습니다. 계속할까요?"
+        )
+      ) {
+        return;
+      }
+      if (!supportsStreamFetch()) {
+        showAlert(pageAlert, "이 브라우저는 스트리밍 갱신을 지원하지 않습니다.", true);
+        return;
+      }
+
+      showPanel();
+      setIndeterminate(true);
+      if (lbl) lbl.textContent = "일괄 갱신 준비 중…";
+      if (meta) meta.textContent = "";
+      setBatchBusy(true);
+
+      fetch(streamUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/x-ndjson" },
+        body: "{}",
+        credentials: "same-origin",
+      })
+        .then(function (resp) {
+          if (!resp.ok || !resp.body) {
+            throw new Error("서버 요청 오류 (" + resp.status + ")");
+          }
+          var reader = resp.body.getReader();
+          var dec = new TextDecoder();
+          var buf = "";
+          var stopped = false;
+
+          function pump() {
+            return reader.read().then(function (chunk) {
+              if (stopped) return;
+              var done = chunk.done;
+              buf += dec.decode(chunk.value || new Uint8Array(), { stream: !done });
+              var lines = buf.split("\n");
+              buf = lines.pop() || "";
+              for (var i = 0; i < lines.length; i++) {
+                var trimmed = lines[i].trim();
+                if (!trimmed) continue;
+                var data;
+                try {
+                  data = JSON.parse(trimmed);
+                } catch (e2) {
+                  throw e2;
+                }
+                if (handleStreamEvent(data) === "stop") {
+                  stopped = true;
+                  return;
+                }
+              }
+              return done || stopped ? undefined : pump();
+            });
+          }
+          return pump();
+        })
+        .catch(function (err) {
+          setIndeterminate(false);
+          showAlert(pageAlert, err.message || String(err), true);
+          if (lbl) lbl.textContent = "갱신 실패";
+        })
+        .finally(function () {
+          setBatchBusy(false);
+        });
+    });
+  })();
 
   if (addForm) {
     addForm.addEventListener("submit", function (ev) {
       ev.preventDefault();
       hideAlert(addAlert);
       var raw = (addInput && addInput.value) || "";
+      var biz = normalizeBizInput(raw);
+      if (biz.length !== 10) {
+        window.alert("사업자번호는 10자리 숫자여야 합니다.");
+        return;
+      }
+      if (isBizInPendingTable(biz)) {
+        window.alert("이미 등록된 사업자번호입니다.");
+        return;
+      }
       var submitBtn = document.getElementById("add-biz-submit");
       if (submitBtn) submitBtn.disabled = true;
       fetch("/api/customers/add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ business_number: raw }),
+        body: JSON.stringify({ business_number: biz }),
         credentials: "same-origin",
       })
         .then(function (resp) {
           return resp.json().then(function (data) {
+            if (
+              !resp.ok &&
+              (resp.status === 409 ||
+                data.error === "duplicate_business_number")
+            ) {
+              window.alert(data.message || "이미 등록된 사업자번호입니다.");
+              return Promise.reject({ duplicate: true });
+            }
             if (!resp.ok) throw new Error(data.message || data.error || "등록 실패");
             return data;
           });
@@ -226,9 +491,14 @@
         .then(function (data) {
           showAlert(addAlert, data.message || "등록되었습니다.", false);
           if (addInput) addInput.value = "";
-          if (data.row) prependRow(data.row);
+          if (data.row) {
+            prependRow(data.row);
+            updatePendingCount();
+            setBatchButtonEnabled();
+          }
         })
         .catch(function (err) {
+          if (err && err.duplicate) return;
           showAlert(addAlert, err.message || String(err), true);
         })
         .finally(function () {
