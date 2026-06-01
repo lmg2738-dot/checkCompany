@@ -487,14 +487,68 @@ def _header_get(name: str) -> str:
     return (request.environ.get(key) or "").strip()
 
 
+def _remote_addr() -> str:
+    return (request.environ.get("REMOTE_ADDR") or "").strip()
+
+
+def _forwarded_client_ip() -> str:
+    raw = (
+        _header_get("X-Forwarded-For")
+        or request.environ.get("HTTP_X_FORWARDED_FOR")
+        or ""
+    ).strip()
+    if not raw:
+        return ""
+    return raw.split(",")[0].strip()
+
+
+def _is_likely_external_http_client() -> bool:
+    """브라우저·curl 등 공인 URL로 들어온 요청 (Cron 내부 프록시와 구분)."""
+    client = _forwarded_client_ip()
+    if client and client not in ("127.0.0.1", "::1"):
+        return True
+    if _remote_addr() not in ("127.0.0.1", "::1", ""):
+        return True
+    return False
+
+
 def _is_vercel_cron_invoke() -> bool:
     if _header_get("x-vercel-cron") == "1":
         return True
+    if (request.environ.get("HTTP_X_VERCEL_CRON") or "").strip() == "1":
+        return True
     if _header_get("x-vercel-cron-schedule"):
         return True
-    ua = _header_get("User-Agent").lower()
+    if (request.environ.get("HTTP_X_VERCEL_CRON_SCHEDULE") or "").strip():
+        return True
+    ua = (
+        _header_get("User-Agent")
+        or request.environ.get("HTTP_USER_AGENT")
+        or ""
+    ).lower()
     if "vercel-cron" in ua:
         return True
+    return False
+
+
+def _is_vercel_internal_cron_proxy() -> bool:
+    """
+    Vercel 스케줄러가 127.0.0.1 로 호출할 때 Authorization/x-vercel-cron 이
+    빠지는 경우(로그: GET /api/cron/daily-risk-email 401, remote 127.0.0.1).
+    외부 클라이언트(x-forwarded-for 실 IP)는 제외 — Bearer/쿼리 필요.
+    """
+    if not os.environ.get("VERCEL"):
+        return False
+    path = (request.path or "").split("?")[0].rstrip("/")
+    if path != "/api/cron/daily-risk-email":
+        return False
+    if _is_likely_external_http_client():
+        return False
+    if _is_vercel_cron_invoke():
+        return True
+    if _remote_addr() in ("127.0.0.1", "::1"):
+        # Cron은 Production 배포에서만 실행
+        return (os.environ.get("VERCEL_ENV") or "").strip() == "production"
     return False
 
 
@@ -527,19 +581,34 @@ def _cron_bearer_matches(auth_header: str, expected: str) -> bool:
 
 def _cron_auth_status() -> dict[str, Any]:
     expected = _cron_secret_value()
-    auth = _header_get("Authorization")
+    auth = _header_get("Authorization") or (
+        request.environ.get("HTTP_AUTHORIZATION") or ""
+    ).strip()
     bearer_ok = _cron_bearer_matches(auth, expected) if expected else False
     vercel_cron = _is_vercel_cron_invoke()
+    internal_proxy = _is_vercel_internal_cron_proxy()
     query_ok = _cron_query_secret_ok()
-    # Vercel Cron: Authorization Bearer CRON_SECRET + x-vercel-cron / UA vercel-cron
-    authorized = (not expected) or bearer_ok or vercel_cron or query_ok
+    # Vercel Cron: Bearer / x-vercel-cron / 내부 127.0.0.1 스케줄 프록시
+    authorized = (
+        (not expected)
+        or bearer_ok
+        or vercel_cron
+        or internal_proxy
+        or query_ok
+    )
     return {
         "cron_secret_configured": bool(expected),
         "authorization_header_present": bool(auth),
         "bearer_matches": bearer_ok,
         "query_secret_matches": query_ok,
         "vercel_cron_detected": vercel_cron,
-        "user_agent": _header_get("User-Agent")[:120],
+        "vercel_internal_cron_proxy": internal_proxy,
+        "remote_addr": _remote_addr(),
+        "forwarded_client_ip": _forwarded_client_ip(),
+        "external_client": _is_likely_external_http_client(),
+        "user_agent": (
+            _header_get("User-Agent") or request.environ.get("HTTP_USER_AGENT") or ""
+        )[:120],
         "authorized": authorized,
     }
 
@@ -555,11 +624,16 @@ def _cron_unauthorized_response() -> tuple[Any, int]:
         "Vercel Production 환경변수 CRON_SECRET 과 동일한 값을 넣으세요. "
         "브라우저 주소창만으로는 호출할 수 없습니다."
     )
-    if st["cron_secret_configured"] and not st["authorization_header_present"]:
+    if st.get("external_client") and st["cron_secret_configured"]:
         hint = (
             "CRON_SECRET 이 설정되어 있습니다. 예: "
             'curl -H "Authorization: Bearer YOUR_SECRET" '
             "https://check-company.vercel.app/api/cron/daily-risk-email"
+        )
+    elif st["cron_secret_configured"] and not st["authorization_header_present"]:
+        hint = (
+            "외부 호출에는 Authorization: Bearer CRON_SECRET 이 필요합니다. "
+            "Vercel Cron(127.0.0.1 내부 호출)은 배포 후 internal_proxy 로 통과해야 합니다."
         )
     return (
         jsonify(

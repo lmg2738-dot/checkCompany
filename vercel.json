@@ -6,6 +6,10 @@
     "api/index.py": {
       "maxDuration": 300,
       "memory": 1024
+    },
+    "api/cron/daily-risk-email.py": {
+      "maxDuration": 300,
+      "memory": 1024
     }
   },
   "crons": [
@@ -15,6 +19,10 @@
     }
   ],
   "rewrites": [
+    {
+      "source": "/api/cron/daily-risk-email",
+      "destination": "/api/cron/daily-risk-email"
+    },
     {
       "source": "/(.*)",
       "destination": "/api/index"

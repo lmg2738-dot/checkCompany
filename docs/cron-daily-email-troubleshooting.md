@@ -11,12 +11,13 @@
 
 ## Vercel Cron 인증
 
-Production에 `CRON_SECRET` 이 있으면 Vercel이 Cron 호출 시 자동으로 보냅니다.
+Production에 `CRON_SECRET` 이 있으면 Vercel이 Cron 호출 시 `Authorization` 헤더를 보내야 합니다.
 
-- `Authorization: Bearer <CRON_SECRET>`
-- `x-vercel-cron: 1` 또는 `User-Agent: vercel-cron/1.0`
+다만 로그에 `127.0.0.1` 만 보이고 **401** 이면, rewrite 경유 시 헤더가 빠진 **내부 프록시 호출**일 수 있습니다.  
+이 경우 코드가 `vercel_internal_cron_proxy` 로 Production 내부 호출을 허용합니다.
 
-둘 중 하나만 맞아도 통과합니다 (`/api/cron/auth-check` 참고).
+- 외부 수동 호출: `Authorization: Bearer <CRON_SECRET>` 필수
+- `api/cron/daily-risk-email.py` 전용 진입점 + rewrite 예외 (헤더 유지)
 
 ### ping 테스트
 
