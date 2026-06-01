@@ -310,6 +310,7 @@ table.sheet-data-table {
   border-radius: 10px;
   background: var(--accent);
   color: #fff;
+  font-family: inherit;
   font-weight: 700;
   font-size: 1.05rem;
   letter-spacing: -0.01em;
@@ -317,6 +318,13 @@ table.sheet-data-table {
   cursor: pointer;
   box-shadow: 0 2px 10px rgba(26, 95, 180, 0.28);
   white-space: nowrap;
+  text-decoration: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.hero-head-actions .btn-email {
+  vertical-align: middle;
 }
 
 .btn-email:hover:not(:disabled) {
@@ -824,7 +832,12 @@ span.abbr-hint {
 }
 
 a.btn-enrich,
-a.btn-email {
-  text-decoration: none;
+a.btn-email,
+a.btn-email:link,
+a.btn-email:visited,
+a.btn-email:hover,
+a.btn-email:active {
+  text-decoration: none !important;
+  color: #fff;
   box-sizing: border-box;
 }

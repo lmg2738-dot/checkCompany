@@ -14,15 +14,15 @@
       {% if supabase_configured or resend_ready %}
       <div class="hero-head-actions">
         {% if supabase_configured %}
-        <a href="{{ url_for('customers_enrich_page') }}" target="_blank" rel="noopener noreferrer"
-          class="btn-email" id="enrich-btn"
+        <button type="button" class="btn-email" id="enrich-btn"
+          data-enrich-href="{{ url_for('customers_enrich_page') }}"
           {% if missing_disclosure_count is not none %}
           title="사업자번호만 등록·공시번호 없음 {{ missing_disclosure_count }}건 — 새 창에서 갱신"
           {% else %}
           title="사업자번호만 등록된 항목을 새 창에서 DART로 갱신"
           {% endif %}>
           업체정보갱신
-        </a>
+        </button>
         {% endif %}
         {% if resend_ready %}
         <button type="button" class="btn-email" id="email-btn"
@@ -113,6 +113,18 @@
     </main>
 
 <script>
+(function () {
+  var enrichOpen = document.getElementById("enrich-btn");
+  if (enrichOpen) {
+    var enrichHref = enrichOpen.getAttribute("data-enrich-href");
+    if (enrichHref) {
+      enrichOpen.addEventListener("click", function () {
+        window.open(enrichHref, "_blank", "noopener,noreferrer");
+      });
+    }
+  }
+})();
+
 (function () {
   function supportsStreamFetch() {
     return typeof Response !== "undefined"
