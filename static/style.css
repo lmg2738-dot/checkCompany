@@ -784,8 +784,7 @@ span.abbr-hint {
   font-size: 1rem;
 }
 
-.add-biz-row .btn-primary,
-.add-biz-row .btn-delete {
+.add-biz-row .btn-biz-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -807,13 +806,11 @@ span.abbr-hint {
   filter: none;
 }
 
-.add-biz-row .btn-primary:hover:not(:disabled),
-.add-biz-row .btn-delete:hover:not(:disabled) {
+.add-biz-row .btn-biz-action:hover:not(:disabled) {
   background: #fef3f2;
 }
 
-.add-biz-row .btn-primary:disabled,
-.add-biz-row .btn-delete:disabled {
+.add-biz-row .btn-biz-action:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }
