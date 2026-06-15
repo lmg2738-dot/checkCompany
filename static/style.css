@@ -784,6 +784,28 @@ span.abbr-hint {
   font-size: 1rem;
 }
 
+.btn-delete {
+  padding: 0.7rem 1.35rem;
+  border: 2px solid #b42318;
+  border-radius: 999px;
+  background: #fff;
+  color: #b42318;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(180, 35, 24, 0.12);
+}
+
+.btn-delete:hover:not(:disabled) {
+  background: #fef3f2;
+  border-color: #912018;
+}
+
+.btn-delete:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
 .enrich-manage-table .col-action {
   width: 6.5rem;
   text-align: right;

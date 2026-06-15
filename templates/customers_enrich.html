@@ -38,13 +38,14 @@
     </header>
 
     <section class="panel sheet">
-      <h2>사업자번호 추가</h2>
+      <h2>사업자번호 추가·삭제</h2>
       <form id="add-biz-form" class="add-biz-form" novalidate>
         <label for="new_biz_input">사업자번호 (10자리)</label>
         <div class="add-biz-row">
           <input type="text" id="new_biz_input" class="biz-input" inputmode="numeric"
             maxlength="12" placeholder="예: 1018109147" autocomplete="off" />
           <button type="submit" class="btn-primary" id="add-biz-submit">등록</button>
+          <button type="button" class="btn-delete" id="delete-biz-btn">삭제</button>
         </div>
       </form>
       <div id="add-biz-alert" class="alert" hidden role="alert"></div>
@@ -103,6 +104,7 @@
 (function () {
   var addForm = document.getElementById("add-biz-form");
   var addInput = document.getElementById("new_biz_input");
+  var deleteBtn = document.getElementById("delete-biz-btn");
   var addAlert = document.getElementById("add-biz-alert");
   var pageAlert = document.getElementById("page-alert");
   var tbody = document.getElementById("pending-tbody");
@@ -309,9 +311,11 @@
       tbody.querySelectorAll(".btn-row-enrich").forEach(function (b) {
         b.disabled = !!on;
       });
-      if (addForm) addForm.querySelectorAll("button, input").forEach(function (el) {
-        el.disabled = !!on;
-      });
+      if (addForm) {
+        addForm.querySelectorAll("button, input").forEach(function (el) {
+          el.disabled = !!on;
+        });
+      }
     }
 
     function handleStreamEvent(data) {
@@ -503,6 +507,57 @@
         })
         .finally(function () {
           if (submitBtn) submitBtn.disabled = false;
+        });
+    });
+  }
+
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", function () {
+      hideAlert(addAlert);
+      var raw = (addInput && addInput.value) || "";
+      if (!String(raw).trim()) {
+        window.alert("삭제할 사업자번호를 입력하세요.");
+        return;
+      }
+      var biz = normalizeBizInput(raw);
+      if (biz.length !== 10) {
+        window.alert("사업자번호는 10자리 숫자여야 합니다.");
+        return;
+      }
+      if (
+        !window.confirm(
+          "사업자번호 " + biz + "를 DB에서 영구 삭제합니다.\n\n정말 삭제하시겠습니까?"
+        )
+      ) {
+        return;
+      }
+
+      deleteBtn.disabled = true;
+      fetch("/api/customers/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ business_number: biz }),
+        credentials: "same-origin",
+      })
+        .then(function (resp) {
+          return resp.json().then(function (data) {
+            if (resp.status === 404 || data.error === "not_found") {
+              window.alert(data.message || "DB에 등록된 사업자번호가 없습니다.");
+              return Promise.reject({ notFound: true });
+            }
+            if (!resp.ok) throw new Error(data.message || data.error || "삭제 실패");
+            return data;
+          });
+        })
+        .then(function () {
+          window.location.reload();
+        })
+        .catch(function (err) {
+          if (err && (err.notFound || err.duplicate)) return;
+          showAlert(addAlert, err.message || String(err), true);
+        })
+        .finally(function () {
+          deleteBtn.disabled = false;
         });
     });
   }

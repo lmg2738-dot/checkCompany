@@ -1021,6 +1021,34 @@ def api_customers_add():
         return jsonify({"ok": False, "error": "server", "message": str(e)}), 500
 
 
+@app.route("/api/customers/delete", methods=["POST"])
+def api_customers_delete():
+    if not _supabase_ready():
+        return jsonify({"ok": False, "error": "supabase_not_configured", "message": "Supabase 미설정"}), 503
+    payload = request.get_json(force=True, silent=True) or {}
+    raw_biz = str(payload.get("business_number") or payload.get("biz") or "").strip()
+    if not raw_biz:
+        return jsonify(
+            {"ok": False, "error": "empty", "message": "삭제할 사업자번호를 입력하세요."}
+        ), 400
+    try:
+        deleted = supabase_customers.delete_customer_by_business_number(raw_biz)
+        biz = deleted.get("business_number") or normalize_biz_number(raw_biz)
+        return jsonify(
+            {
+                "ok": True,
+                "message": f"사업자번호 {biz}를 DB에서 삭제했습니다.",
+                "row": deleted,
+            }
+        )
+    except supabase_customers.CustomerNotFoundError as e:
+        return jsonify({"ok": False, "error": "not_found", "message": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"ok": False, "error": "validation", "message": str(e)}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": "server", "message": str(e)}), 500
+
+
 @app.route("/api/customers/enrich-one", methods=["POST"])
 def api_customers_enrich_one():
     if not _supabase_ready():

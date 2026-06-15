@@ -249,6 +249,10 @@ class DuplicateBusinessNumberError(ValueError):
     """동일 사업자번호가 customers에 이미 있음."""
 
 
+class CustomerNotFoundError(ValueError):
+    """customers에 해당 사업자번호 없음."""
+
+
 def insert_business_number_only(business_number: str) -> dict[str, Any]:
     """사업자번호만 신규 등록. 동일 번호가 있으면 등록하지 않음."""
     biz = normalize_biz_number(business_number)
@@ -267,6 +271,28 @@ def insert_business_number_only(business_number: str) -> dict[str, Any]:
     }
     upsert_customer_rows([row])
     return fetch_customer_by_business_number(biz, force_refresh=True) or row
+
+
+def delete_customer_by_business_number(business_number: str) -> dict[str, Any]:
+    """사업자번호로 customers 행 삭제."""
+    biz = normalize_biz_number(business_number)
+    if len(biz) != 10:
+        raise ValueError("사업자번호는 10자리 숫자여야 합니다.")
+
+    existing = fetch_customer_by_business_number(biz)
+    if not existing:
+        raise CustomerNotFoundError(f"DB에 등록된 사업자번호가 없습니다: {biz}")
+
+    endpoint = f"{_rest_base()}/customers"
+    params = {"business_number": f"eq.{biz}"}
+    r = _SESSION.delete(endpoint, params=params, headers=_rest_headers(), timeout=60)
+    if r.status_code >= 400:
+        raise RuntimeError(
+            f"Supabase 삭제 실패 HTTP {r.status_code}: {(r.text or '')[:500]}"
+        )
+
+    invalidate_customer_cache()
+    return pending_row_display(existing)
 
 
 def db_row_to_customer(row: dict[str, Any]) -> dict[str, Any]:
