@@ -86,7 +86,10 @@
               <td class="td-mono col-stock">{{ r.stock_code or '—' }}</td>
               <td class="col-created muted">{{ r.created_at_display or '—' }}</td>
               <td class="col-action">
-                <button type="button" class="btn-row-enrich" data-biz="{{ r.business_number }}">갱신</button>
+                <div class="row-action-btns">
+                  <button type="button" class="btn-row-enrich" data-biz="{{ r.business_number }}">갱신</button>
+                  <button type="button" class="btn-row-delete" data-biz="{{ r.business_number }}">삭제</button>
+                </div>
               </td>
             </tr>
             {% else %}
@@ -150,6 +153,15 @@
     }
   }
 
+  function actionCellHtml(biz) {
+    return (
+      '<td class="col-action"><div class="row-action-btns">' +
+      '<button type="button" class="btn-row-enrich" data-biz="' + escapeHtml(biz) + '">갱신</button>' +
+      '<button type="button" class="btn-row-delete" data-biz="' + escapeHtml(biz) + '">삭제</button>' +
+      "</div></td>"
+    );
+  }
+
   function prependRow(row) {
     var empty = document.getElementById("empty-row");
     if (empty) empty.remove();
@@ -161,8 +173,7 @@
       '<td class="td-mono col-corp">—</td>' +
       '<td class="td-mono col-stock">—</td>' +
       '<td class="col-created muted">' + escapeHtml(formatCreated(row.created_at)) + "</td>" +
-      '<td class="col-action"><button type="button" class="btn-row-enrich" data-biz="' +
-      escapeHtml(row.business_number) + '">갱신</button></td>';
+      actionCellHtml(row.business_number);
     if (tbody.firstChild) {
       tbody.insertBefore(tr, tbody.firstChild);
     } else {
@@ -232,6 +243,64 @@
       });
   }
 
+  function deleteOne(biz, btn) {
+    if (
+      !window.confirm(
+        "사업자번호 " + biz + "를 DB에서 영구 삭제합니다.\n\n정말 삭제하시겠습니까?"
+      )
+    ) {
+      return;
+    }
+    hideAlert(pageAlert);
+    var tr = tbody.querySelector('tr[data-biz="' + biz + '"]');
+    if (tr) {
+      tr.querySelectorAll("button").forEach(function (b) {
+        b.disabled = true;
+      });
+    } else if (btn) {
+      btn.disabled = true;
+    }
+    if (btn) btn.textContent = "삭제 중…";
+
+    return fetch("/api/customers/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ business_number: biz }),
+      credentials: "same-origin",
+    })
+      .then(function (resp) {
+        return resp.json().then(function (data) {
+          if (resp.status === 404 || data.error === "not_found") {
+            window.alert(data.message || "DB에 등록된 사업자번호가 없습니다.");
+            return Promise.reject({ notFound: true });
+          }
+          if (!resp.ok) throw new Error(data.message || data.error || "삭제 실패");
+          return data;
+        });
+      })
+      .then(function () {
+        window.location.reload();
+      })
+      .catch(function (err) {
+        if (err && err.notFound) {
+          if (tr) {
+            tr.querySelectorAll("button").forEach(function (b) {
+              b.disabled = false;
+            });
+          }
+          if (btn) btn.textContent = "삭제";
+          return;
+        }
+        showAlert(pageAlert, err.message || String(err), true);
+        if (tr) {
+          tr.querySelectorAll("button").forEach(function (b) {
+            b.disabled = false;
+          });
+        }
+        if (btn) btn.textContent = "삭제";
+      });
+  }
+
   function bindRowButtons(root) {
     var scope = root || document;
     scope.querySelectorAll(".btn-row-enrich").forEach(function (btn) {
@@ -239,6 +308,13 @@
       btn.dataset.bound = "1";
       btn.addEventListener("click", function () {
         enrichOne(btn.getAttribute("data-biz"), btn);
+      });
+    });
+    scope.querySelectorAll(".btn-row-delete").forEach(function (btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", function () {
+        deleteOne(btn.getAttribute("data-biz"), btn);
       });
     });
   }
@@ -308,7 +384,7 @@
         batchBtn.textContent = defaultLabel;
         setBatchButtonEnabled();
       }
-      tbody.querySelectorAll(".btn-row-enrich").forEach(function (b) {
+      tbody.querySelectorAll(".btn-row-enrich, .btn-row-delete").forEach(function (b) {
         b.disabled = !!on;
       });
       if (addForm) {
